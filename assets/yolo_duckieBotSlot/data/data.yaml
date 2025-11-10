@@ -1,0 +1,5 @@
+train: ../train/images
+val: ../valid/images
+
+nc: 4  # number of classes
+names: ['Duckie', 'Bot', 'freeSlot', 'occupiedSlot']  # replace with your class names

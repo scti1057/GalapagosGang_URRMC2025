@@ -1,0 +1,4 @@
+#duckie
+Bot
+freeSlot
+occupiedSlot

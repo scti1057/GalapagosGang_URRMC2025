@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Duckies']
+
+roboflow:
+  workspace: duckies-in-simulations
+  project: duckietown-duckies
+  version: 4
+  license: Public Domain
+  url: https://universe.roboflow.com/duckies-in-simulations/duckietown-duckies/dataset/4

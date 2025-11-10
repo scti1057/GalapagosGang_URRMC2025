@@ -1,0 +1,25 @@
+{
+  "categories": [
+    {
+      "id": 0,
+      "name": "#duckie"
+    },
+    {
+      "id": 1,
+      "name": "Bot"
+    },
+    {
+      "id": 2,
+      "name": "freeSpot"
+    },
+    {
+      "id": 3,
+      "name": "occupiedSlot"
+    }
+  ],
+  "info": {
+    "year": 2025,
+    "version": "1.0",
+    "contributor": "Label Studio"
+  }
+}
