@@ -1,0 +1,3 @@
+[console_scripts]
+sensor_fusion_birdseye = test_package.sensor_fusion_birdseye:main
+

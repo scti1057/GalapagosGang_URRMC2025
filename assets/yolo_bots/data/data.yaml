@@ -1,5 +1,0 @@
-train: ../train/images
-val: ../valid/images
-
-nc: 3  # number of classes
-names: ['Bot', 'freeSlot', 'occupiedSlot']  # replace with your class names

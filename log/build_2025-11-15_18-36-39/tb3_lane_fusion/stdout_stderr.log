@@ -1,0 +1,28 @@
+running egg_info
+writing ../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/PKG-INFO
+writing dependency_links to ../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/dependency_links.txt
+writing entry points to ../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/entry_points.txt
+writing requirements to ../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/requires.txt
+writing top-level names to ../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/top_level.txt
+reading manifest file '../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/SOURCES.txt'
+writing manifest file '../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info/SOURCES.txt'
+running build
+running build_py
+copying tb3_lane_fusion/lane_bev_node.py -> /home/duckie5/turtlebot3_ws/build/tb3_lane_fusion/build/lib/tb3_lane_fusion
+copying tb3_lane_fusion/lane_map_node.py -> /home/duckie5/turtlebot3_ws/build/tb3_lane_fusion/build/lib/tb3_lane_fusion
+running install
+running install_lib
+copying /home/duckie5/turtlebot3_ws/build/tb3_lane_fusion/build/lib/tb3_lane_fusion/lane_bev_node.py -> /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/python3.10/site-packages/tb3_lane_fusion
+copying /home/duckie5/turtlebot3_ws/build/tb3_lane_fusion/build/lib/tb3_lane_fusion/lane_map_node.py -> /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/python3.10/site-packages/tb3_lane_fusion
+byte-compiling /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/python3.10/site-packages/tb3_lane_fusion/lane_bev_node.py to lane_bev_node.cpython-310.pyc
+byte-compiling /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/python3.10/site-packages/tb3_lane_fusion/lane_map_node.py to lane_map_node.cpython-310.pyc
+running install_data
+running install_egg_info
+removing '/home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/python3.10/site-packages/tb3_lane_fusion-0.0.0-py3.10.egg-info' (and everything under it)
+Copying ../../build/tb3_lane_fusion/tb3_lane_fusion.egg-info to /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/python3.10/site-packages/tb3_lane_fusion-0.0.0-py3.10.egg-info
+running install_scripts
+Installing lane_bev_node script to /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/tb3_lane_fusion
+Installing lane_map_node script to /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/tb3_lane_fusion
+Installing slam_interface_node script to /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/tb3_lane_fusion
+Installing test_node script to /home/duckie5/turtlebot3_ws/install/tb3_lane_fusion/lib/tb3_lane_fusion
+writing list of installed files to '/home/duckie5/turtlebot3_ws/build/tb3_lane_fusion/install.log'

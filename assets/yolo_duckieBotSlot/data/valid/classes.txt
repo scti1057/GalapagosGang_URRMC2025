@@ -1,4 +1,0 @@
-#duckie
-Bot
-freeSlot
-occupiedSlot
