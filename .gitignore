@@ -1,7 +1,76 @@
+##########
+# Colcon / ROS2 build artefacts
+##########
+
+/build/
+/install/
+/log/
+
+# symlinks created by colcon build
+*symlink-install*
+
+##########
+# ROS2 / Navigation2 Maps & Logs (nur ignorieren, wenn ihr sie nicht versionieren wollt)
+##########
+
+# Map server output maps
+*.pgm
+*.yaml
+
+# Slam Toolbox serialized graph
+*.posegraph
+*.data
+
+# Nav2 costmap debug images
+*.png
+
+##########
+# CMake / Compiler Artefakte
+##########
+
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# catkin-like leftovers (falls gemischt)
+devel/
+*.egg-info/
+
+##########
+# Python Cache
+##########
+
+__pycache__/
+*.pyc
+*.pyo
+
+##########
+# VSCode / IDE
+##########
+
+.venv/
+.vscode/
+.vs/
+.idea/
+*.swp
+*.swo
+
+##########
+# System / OS
+##########
+
+.DS_Store
+Thumbs.db
+
+##########
+# Launch files mit lokalen Paths (optional)
+##########
+# Falls manche von euch absolute Pfade enthalten:
+#*.launch.py
 
 
-docs/build
-*pyc
+
 
 # documentation artifacts
 html/*
@@ -9,9 +78,3 @@ html/*
 
 # otherwise CI thinks index not clean
 *.resolved
-
-.vs/
-
-.vscode/
-
-.venv/
