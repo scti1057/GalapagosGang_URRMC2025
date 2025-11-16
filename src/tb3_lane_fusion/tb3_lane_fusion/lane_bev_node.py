@@ -39,12 +39,19 @@ class LaneBevNode(Node):
         self.bev_pub = self.create_publisher(Image, 'lane_bev/image', 10)
         self.mask_pub = self.create_publisher(Image, 'lane_bev/mask', 10)
 
+        # NEW: separate masks for right/left lanes
+        self.mask_white_pub = self.create_publisher(Image, 'lane_bev/mask_white', 10)
+        self.mask_yellow_pub = self.create_publisher(Image, 'lane_bev/mask_yellow', 10)
+
+        # NEW: original image with BEV trapezoid drawn on it
+        self.calib_pub = self.create_publisher(Image, 'lane_bev/image_calib', 10)
+
         # Hard-coded homography points for now (for a 640x480 input image)
         # These are EXAMPLES and will need tuning for your camera pose!
         # src: trapezoid in original image where the floor is visible
         self.src_points = np.float32([
-            [180, 300],  # top-left in image
-            [460, 300],  # top-right
+            [180, 200],  # top-left in image
+            [460, 200],  # top-right
             [40,  470],  # bottom-left
             [600, 470],  # bottom-right
         ])
@@ -81,6 +88,37 @@ class LaneBevNode(Node):
         except Exception as e:
             self.get_logger().error(f'cv_bridge error: {e}')
             return
+
+        # --- Debug: draw BEV trapezoid on original image ---
+        debug_img = cv_image.copy()
+
+        # Ensure src_points are valid ints
+        src_pts_int = self.src_points.astype(np.int32).reshape(-1, 1, 2)
+
+        # Draw polygon edges (red)
+        cv2.polylines(debug_img, [src_pts_int], isClosed=True, color=(0, 0, 255), thickness=2)
+
+        # Draw corner points with small circles and labels
+        labels = ['P0', 'P1', 'P2', 'P3']
+        for i, (x, y) in enumerate(self.src_points):
+            x_i, y_i = int(x), int(y)
+            cv2.circle(debug_img, (x_i, y_i), 5, (0, 255, 0), -1)  # green dot
+            cv2.putText(
+                debug_img, labels[i],
+                (x_i + 5, y_i - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (255, 255, 255), 1, cv2.LINE_AA
+            )
+
+        # Publish calibration image
+        try:
+            calib_msg = self.bridge.cv2_to_imgmsg(debug_img, encoding='bgr8')
+            calib_msg.header = msg.header
+            # keep camera frame_id here – this is the *original* image
+            self.calib_pub.publish(calib_msg)
+        except Exception as e:
+            self.get_logger().error(f'Error publishing calibration image: {e}')
+        # --- end debug ---
 
         if self.M is None:
             self.compute_homography(cv_image.shape)
@@ -130,6 +168,20 @@ class LaneBevNode(Node):
             self.mask_pub.publish(mask_msg)
         except Exception as e:
             self.get_logger().error(f'Error publishing mask image: {e}')
+
+        # NEW: publish white and yellow masks separately
+        try:
+            white_msg = self.bridge.cv2_to_imgmsg(mask_white, encoding='mono8')
+            white_msg.header = msg.header
+            white_msg.header.frame_id = self.output_frame
+            self.mask_white_pub.publish(white_msg)
+
+            yellow_msg = self.bridge.cv2_to_imgmsg(mask_yellow, encoding='mono8')
+            yellow_msg.header = msg.header
+            yellow_msg.header.frame_id = self.output_frame
+            self.mask_yellow_pub.publish(yellow_msg)
+        except Exception as e:
+            self.get_logger().error(f'Error publishing white/yellow masks: {e}')
 
         # Log occasionally
         self.get_logger().debug('Published BEV and lane mask')

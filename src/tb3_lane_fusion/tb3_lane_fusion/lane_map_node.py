@@ -28,6 +28,12 @@ class LaneMapNode(Node):
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'base_footprint')
 
+        # Visualization parameters (so we can run multiple instances)
+        self.declare_parameter('marker_ns', 'lane_points')
+        self.declare_parameter('color_r', 1.0)
+        self.declare_parameter('color_g', 1.0)
+        self.declare_parameter('color_b', 0.0)
+
         # BEV physical extents in front of robot (meters)
         self.declare_parameter('x_near_m', 0.2)   # near distance (bottom of BEV)
         self.declare_parameter('x_far_m', 2.0)    # far distance (top of BEV)
@@ -40,6 +46,11 @@ class LaneMapNode(Node):
         self.bev_mask_topic = self.get_parameter('bev_mask_topic').get_parameter_value().string_value
         self.map_frame = self.get_parameter('map_frame').get_parameter_value().string_value
         self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
+
+        self.marker_ns = self.get_parameter('marker_ns').get_parameter_value().string_value
+        self.color_r = float(self.get_parameter('color_r').get_parameter_value().double_value)
+        self.color_g = float(self.get_parameter('color_g').get_parameter_value().double_value)
+        self.color_b = float(self.get_parameter('color_b').get_parameter_value().double_value)
 
         self.x_near_m = float(self.get_parameter('x_near_m').get_parameter_value().double_value)
         self.x_far_m = float(self.get_parameter('x_far_m').get_parameter_value().double_value)
@@ -133,7 +144,7 @@ class LaneMapNode(Node):
         marker = Marker()
         marker.header.frame_id = self.map_frame
         marker.header.stamp = msg.header.stamp  # time not super critical
-        marker.ns = 'lane_points'
+        marker.ns = self.marker_ns
         marker.id = 0
         marker.type = Marker.POINTS
         marker.action = Marker.ADD
@@ -143,9 +154,9 @@ class LaneMapNode(Node):
 
         # Yellow color
         marker.color.a = 1.0
-        marker.color.r = 1.0
-        marker.color.g = 1.0
-        marker.color.b = 0.0
+        marker.color.r = self.color_r
+        marker.color.g = self.color_g
+        marker.color.b = self.color_b
 
         marker.points = []
 
@@ -168,7 +179,8 @@ class LaneMapNode(Node):
             x_local = self.x_near_m + alpha * (self.x_far_m - self.x_near_m)
 
             # u: 0 (left) -> W-1 (right)
-            beta = u / float(W - 1)
+            # Flip horizontally so that left/right in BEV matches map coordinates
+            beta = 1.0 - (u / float(W - 1))
             y_local = self.y_left_m + beta * (self.y_right_m - self.y_left_m)
 
             # Rotate + translate into map frame
