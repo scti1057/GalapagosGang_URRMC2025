@@ -1,1 +1,0 @@
-/home/duckie5/turtlebot3_ws/src/DynamixelSDK/ros/dynamixel_sdk/include/dynamixel_sdk/group_handler.h
