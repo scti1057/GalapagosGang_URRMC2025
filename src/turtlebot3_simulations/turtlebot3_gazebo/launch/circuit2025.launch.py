@@ -30,8 +30,10 @@ def generate_launch_description():
     pkg_gazebo_ros = get_package_share_directory('gazebo_ros')
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
-    x_pose = LaunchConfiguration('x_pose', default='0.0')
-    y_pose = LaunchConfiguration('y_pose', default='-1.8')
+    # pose challenge 1: x=0.0; y=-1.8
+    # pose challenge 2: x=1.8; y=-0.5 <-- without rotation
+    x_pose = LaunchConfiguration('x_pose', default='1.8')
+    y_pose = LaunchConfiguration('y_pose', default='-0.5')
 
     # Neues Launch-Argument für das TB3-Modell
     model = LaunchConfiguration('model', default='burger_cam')
@@ -71,7 +73,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'x_pose': x_pose,
-            'y_pose': y_pose
+            'y_pose': y_pose,
         }.items()
     )
 
