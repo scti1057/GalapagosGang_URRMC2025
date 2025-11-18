@@ -28,6 +28,7 @@ setup(
         'slam_interface_node = tb3_lane_fusion.slam_interface_node:main',
         'lane_bev_node = tb3_lane_fusion.lane_bev_node:main',
         'lane_map_node = tb3_lane_fusion.lane_map_node:main',
+        'lane_grid_node = tb3_lane_fusion.lane_grid_node:main',
         ],
     },
 )
