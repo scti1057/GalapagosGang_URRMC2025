@@ -31,7 +31,7 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     x_pose = LaunchConfiguration('x_pose', default='0.0')
-    y_pose = LaunchConfiguration('y_pose', default='0.0')
+    y_pose = LaunchConfiguration('y_pose', default='-1.8')
 
     # Neues Launch-Argument für das TB3-Modell
     model = LaunchConfiguration('model', default='burger_cam')

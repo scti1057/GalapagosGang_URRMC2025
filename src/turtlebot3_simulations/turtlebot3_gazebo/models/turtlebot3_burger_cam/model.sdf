@@ -345,7 +345,7 @@
         <mass>0.035</mass>
       </inertial>
 
-      <pose>0.076 0.0 0.093 0 0 0</pose>
+      <pose>0.076 0.0 0.093 0 0.5 0</pose>
       <sensor name="camera" type="wideanglecamera">
         <always_on>true</always_on>
         <visualize>true</visualize>
