@@ -1,0 +1,33 @@
+red_sign_detector:
+  ros__parameters:
+    # Kamera-Topic
+    image_topic: "/camera/image_raw"
+
+    # HSV-Bereiche für Rot (0–180 für H in OpenCV)
+    # Bereich 1 (untere Rot-Spitze)
+    red1_lower: [0, 100, 100]      # H, S, V
+    red1_upper: [10, 255, 255]
+
+    # Bereich 2 (obere Rot-Spitze, wegen Hue-Wrap)
+    red2_lower: [170, 100, 100]
+    red2_upper: [180, 255, 255]
+
+    # Minimale Konturfläche, damit es als Schild gilt (Pixel)
+    min_area: 5.0
+
+    # Horizontaler Kamerawinkel (radian) – ca. 60° = 1.047
+    hfov: 1.047
+
+    # Angenommene Standardentfernung für Positionsschätzung (m)
+    default_distance: 1.0
+
+    # Frame, in dem die Pose ausgegeben wird
+    pose_frame_id: "base_link"
+
+    # Debug-Ausgabe (markiertes Bild)
+    debug_image: true
+    debug_image_topic: "/red_sign/debug_image"
+
+    # Ausgabe-Topics
+    detected_topic: "/red_sign_detected"
+    pose_topic: "/red_sign_pose"

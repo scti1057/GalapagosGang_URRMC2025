@@ -14,8 +14,8 @@
 ##########
 
 # Map server output maps
-*.pgm
-*.yaml
+# *.pgm
+# *.yaml
 
 # Slam Toolbox serialized graph
 *.posegraph
