@@ -2,6 +2,15 @@ red_sign_detector:
   ros__parameters:
     # Kamera-Topic
     image_topic: "/camera/image_raw"
+    # LiDAR-Topic
+    scan_topic: "/scan"
+    use_lidar_distance: true
+
+    # Kamera 88 mm vor, 58 mm unter LiDAR:
+    camera_offset_x: 0.31
+    camera_offset_z: -0.058
+
+    scan_angle_offset: 0.0  # falls nötig später kalibrieren
 
     # HSV-Bereiche für Rot (0–180 für H in OpenCV)
     # Bereich 1 (untere Rot-Spitze)
@@ -15,8 +24,9 @@ red_sign_detector:
     # Minimale Konturfläche, damit es als Schild gilt (Pixel)
     min_area: 5.0
 
-    # Horizontaler Kamerawinkel (radian) – ca. 60° = 1.047
-    hfov: 1.047
+    # Horizontaler Kamerawinkel (deg) – ca. 60° = 1.047
+    hfov: 160.0
+    vfov: 160.0
 
     # Angenommene Standardentfernung für Positionsschätzung (m)
     default_distance: 1.0
@@ -30,4 +40,4 @@ red_sign_detector:
 
     # Ausgabe-Topics
     detected_topic: "/red_sign_detected"
-    pose_topic: "/red_sign_pose"
+    pose_topic: "/red_sign_orient"
