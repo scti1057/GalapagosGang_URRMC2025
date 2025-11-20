@@ -7,11 +7,13 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32MultiArray
 from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge, CvBridgeError
+from typing import Optional
 
 
 class RedSignDetector(Node):
@@ -19,14 +21,15 @@ class RedSignDetector(Node):
     Detektiert ein rotes Schild im Kamerabild.
 
     - Sub:  image_topic (sensor_msgs/Image, BGR)
+            scan_topic  (sensor_msgs/LaserScan) – optional für Distanz
     - Pub:  detected_topic (std_msgs/Bool)
-            pose_topic     (geometry_msgs/PoseStamped) – grobe relative Pose zum Schild
+            pose_topic     (geometry_msgs/PoseStamped) – relative Pose zum Schild
 
-    Pose-Interpretation (vereinfacht):
+    Pose-Interpretation:
       - frame_id: pose_frame_id (Default: base_link)
-      - position.x: default_distance
-      - position.y: default_distance * tan(bearing_angle)
-      - yaw: bearing_angle (Schild vor / leicht links / rechts)
+      - position.x, position.y: aus Bild-Winkel + LiDAR-Distanz (falls verfügbar),
+        sonst default_distance.
+      - Orientierung yaw zeigt zum Schild.
     """
 
     def __init__(self):
@@ -35,13 +38,15 @@ class RedSignDetector(Node):
         # --- Parameter einlesen ---
         self.declare_parameter('image_topic', '/camera/image_raw')
 
+        # HSV-Schwellen für Rot
         self.declare_parameter('red1_lower', [0, 100, 100])
         self.declare_parameter('red1_upper', [10, 255, 255])
         self.declare_parameter('red2_lower', [170, 100, 100])
         self.declare_parameter('red2_upper', [180, 255, 255])
 
         self.declare_parameter('min_area', 500.0)
-        self.declare_parameter('hfov', 1.047)  # ~60°
+        self.declare_parameter('hfov', 160.0)  # ~160°
+        self.declare_parameter('vfov', 160.0)  # ~160°
         self.declare_parameter('default_distance', 1.0)
         self.declare_parameter('pose_frame_id', 'base_link')
 
@@ -49,8 +54,9 @@ class RedSignDetector(Node):
         self.declare_parameter('debug_image_topic', '/red_sign/debug_image')
 
         self.declare_parameter('detected_topic', '/red_sign_detected')
-        self.declare_parameter('pose_topic', '/red_sign_pose')
+        self.declare_parameter('orient_topic', '/red_sign_orient')
 
+        # Parameterwerte holen
         image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
 
         red1_lower_arr = self.get_parameter('red1_lower').get_parameter_value().integer_array_value
@@ -63,16 +69,35 @@ class RedSignDetector(Node):
         self.red2_lower = np.array(red2_lower_arr, dtype=np.uint8)
         self.red2_upper = np.array(red2_upper_arr, dtype=np.uint8)
 
-        self.min_area = float(self.get_parameter('min_area').get_parameter_value().double_value)
+        self.min_area = float(
+            self.get_parameter('min_area').get_parameter_value().double_value
+        )
         self.hfov = float(self.get_parameter('hfov').get_parameter_value().double_value)
-        self.default_distance = float(self.get_parameter('default_distance').get_parameter_value().double_value)
-        self.pose_frame_id = self.get_parameter('pose_frame_id').get_parameter_value().string_value
+        self.vfov = float(self.get_parameter('vfov').get_parameter_value().double_value)
+        self.default_distance = float(
+            self.get_parameter('default_distance').get_parameter_value().double_value
+        )
+        self.pose_frame_id = (
+            self.get_parameter('pose_frame_id').get_parameter_value().string_value
+        )
 
-        self.debug_image_enabled = bool(self.get_parameter('debug_image').get_parameter_value().bool_value)
-        debug_image_topic = self.get_parameter('debug_image_topic').get_parameter_value().string_value
+        self.debug_image_enabled = bool(
+            self.get_parameter('debug_image').get_parameter_value().bool_value
+        )
+        debug_image_topic = (
+            self.get_parameter('debug_image_topic').get_parameter_value().string_value
+        )
 
-        detected_topic = self.get_parameter('detected_topic').get_parameter_value().string_value
-        pose_topic = self.get_parameter('pose_topic').get_parameter_value().string_value
+        detected_topic = (
+            self.get_parameter('detected_topic').get_parameter_value().string_value
+        )
+        orient_topic = self.get_parameter('orient_topic').get_parameter_value().string_value
+
+        # Letzte Werte für Logging
+        self.last_cx_rounded = None
+        self.last_cy_rounded = None
+        self.last_pos_x_rounded = None
+        self.last_pos_y_rounded = None
 
         # --- Bridge & Publisher/Sub ---
         self.bridge = CvBridge()
@@ -85,19 +110,21 @@ class RedSignDetector(Node):
         )
 
         self.detected_pub = self.create_publisher(Bool, detected_topic, 10)
-        self.pose_pub = self.create_publisher(PoseStamped, pose_topic, 10)
+        self.orient_pub = self.create_publisher(Float32MultiArray, orient_topic, 10)
 
         self.debug_pub = None
         if self.debug_image_enabled:
-            from sensor_msgs.msg import Image as ImageMsg  # nur zur Klarheit
-            self.debug_pub = self.create_publisher(ImageMsg, debug_image_topic, 1)
+            self.debug_pub = self.create_publisher(Image, debug_image_topic, 1)
+
+        self.pi = 3.1415
 
         self.get_logger().info(
-            f"RedSignDetector gestartet. Sub: {image_topic}, "
-            f"Pub: detected={detected_topic}, pose={pose_topic}, debug={self.debug_image_enabled}"
+            f"RedSignDetector gestartet.\n"
+            f"  Sub: image={image_topic}\n"
+            f"  Pub: detected={detected_topic}, orient={orient_topic}, debug={self.debug_image_enabled}"
         )
 
-    # ----------------- Bild-Callback -----------------
+    # ----------------- Callbacks -----------------
 
     def image_callback(self, msg: Image):
         try:
@@ -153,48 +180,47 @@ class RedSignDetector(Node):
         cx = M['m10'] / M['m00']
         cy = M['m01'] / M['m00']
 
-        # Bearing-Winkel aus Bildkoordinate
+        # ---- Winkel aus Pixelkoordinaten ----
+        # HFOV/VFOV sind in Grad parametrisiert -> erst nach Radiant umrechnen
+        hfov_rad = math.radians(self.hfov)
+        vfov_rad = math.radians(self.vfov)
+
+        # Horizontale Abweichung (Yaw):
+        # Bildmitte = 0 rad, links positiv, rechts negativ (wie beim Lidar).
         center_x = width / 2.0
         dx_pixels = cx - center_x
-        # Normierter Versatz [-1,1]
-        norm_x = dx_pixels / center_x
-        bearing = norm_x * (self.hfov / 2.0)  # rad
+        norm_x = dx_pixels / center_x           # [-1, 1]
+        yaw_rad = -norm_x * (hfov_rad / 2.0)
 
-        # Grobe Position im pose_frame_id
-        dist = self.default_distance
-        pos_x = dist * math.cos(bearing)
-        pos_y = dist * math.sin(bearing)
+        # Vertikale Abweichung (Pitch) – der Vollständigkeit halber
+        center_y = height / 2.0
+        dy_pixels = cy - center_y
+        norm_y = dy_pixels / center_y           # [-1, 1]
+        pitch_rad = norm_y * (vfov_rad / 2.0)
 
-        pose_msg = PoseStamped()
-        pose_msg.header.stamp = self.get_clock().now().to_msg()
-        pose_msg.header.frame_id = self.pose_frame_id
-
-        pose_msg.pose.position.x = pos_x
-        pose_msg.pose.position.y = pos_y
-        pose_msg.pose.position.z = 0.0
-
-        # Orientierung: Blickrichtung zum Schild
-        qz = math.sin(bearing / 2.0)
-        qw = math.cos(bearing / 2.0)
-        pose_msg.pose.orientation.x = 0.0
-        pose_msg.pose.orientation.y = 0.0
-        pose_msg.pose.orientation.z = qz
-        pose_msg.pose.orientation.w = qw
+        # Fürs Logging in Grad
+        yaw_deg = math.degrees(yaw_rad)
+        pitch_deg = math.degrees(pitch_rad)
 
         # Publish Detection + Pose
         detected_msg = Bool()
         detected_msg.data = True
-        # self.get_logger().info(
-        #     f"detected red sign: {detected_msg.data}, "
-        #     f"detected pos: {pos_x} | {pos_y}"
-        # )
         self.detected_pub.publish(detected_msg)
-        self.pose_pub.publish(pose_msg)
+
+        # Publish Winkel
+        orientation = Float32MultiArray()
+        orientation.data = [yaw_rad, pitch_rad] 
+        self.orient_pub.publish(orientation)
+
+        # self.get_logger().info(
+        #     f"Orientation gesendet: yaw_rad={yaw_rad:.3f}"
+        # )
 
         if self.debug_image_enabled:
             self.publish_debug_image(cv_image, (cx, cy), cnt)
 
     # ----------------- Helper -----------------
+
 
     def publish_no_detection(self):
         msg = Bool()
