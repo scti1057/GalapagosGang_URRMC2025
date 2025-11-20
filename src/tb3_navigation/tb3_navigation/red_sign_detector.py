@@ -184,6 +184,10 @@ class RedSignDetector(Node):
         # Publish Detection + Pose
         detected_msg = Bool()
         detected_msg.data = True
+        # self.get_logger().info(
+        #     f"detected red sign: {detected_msg.data}, "
+        #     f"detected pos: {pos_x} | {pos_y}"
+        # )
         self.detected_pub.publish(detected_msg)
         self.pose_pub.publish(pose_msg)
 

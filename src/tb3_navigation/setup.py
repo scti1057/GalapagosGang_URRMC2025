@@ -26,11 +26,11 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'simple_navigator = tb3_navigation.simple_goal_sender:main',
             'nav_goal_gui = tb3_navigation.nav_goal_gui:main',
             'lane_following_node = tb3_navigation.lane_following_node:main',
             'lane_pose_test_node = tb3_navigation.lane_pose_test_node:main',
             'red_sign_detector = tb3_navigation.red_sign_detector:main',
+            'red_sign_nav_client = tb3_navigation.red_sign_nav_client:main',
         ],
     },
 )
