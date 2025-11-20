@@ -24,7 +24,7 @@ class LaneBevNode(Node):
         # 'auto'    -> use CameraInfo.distortion_model (if == 'fisheye' then fisheye, else pinhole)
         # 'fisheye' -> force fisheye model
         # 'pinhole' -> force pinhole/plumb_bob model
-        self.declare_parameter('undistort_model', 'auto')
+        self.declare_parameter('undistort_model', 'fisheye')
         self.declare_parameter('fisheye_balance', 0.0)  # 0.0 .. 1.0
 
         # Read parameters
