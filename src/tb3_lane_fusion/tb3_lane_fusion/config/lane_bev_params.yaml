@@ -1,0 +1,32 @@
+lane_bev_node:
+  ros__parameters:
+    bev_height: 480
+    bev_width: 810
+    fisheye_balance: 0.0
+    image_topic: /camera/image_raw
+    output_frame: base_footprint
+    red_hsv_lower:
+    - 0
+    - 80
+    - 80
+    red_hsv_upper:
+    - 10
+    - 255
+    - 255
+    undistort_model: fisheye
+    white_hsv_lower:
+    - 0
+    - 0
+    - 238
+    white_hsv_upper:
+    - 255
+    - 57
+    - 255
+    yellow_hsv_lower:
+    - 20
+    - 79
+    - 165
+    yellow_hsv_upper:
+    - 40
+    - 255
+    - 255

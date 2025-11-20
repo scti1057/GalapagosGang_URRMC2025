@@ -2,6 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
@@ -16,7 +17,7 @@ class LaneBevNode(Node):
 
         # --- Parameters ---
         self.declare_parameter('image_topic', '/camera/image_raw')
-        self.declare_parameter('bev_width', 920)
+        self.declare_parameter('bev_width', 810)
         self.declare_parameter('bev_height', 480)
         self.declare_parameter('output_frame', 'base_footprint')
 
@@ -27,21 +28,60 @@ class LaneBevNode(Node):
         self.declare_parameter('undistort_model', 'fisheye')
         self.declare_parameter('fisheye_balance', 0.0)  # 0.0 .. 1.0
 
+        # HSV parameters (default values = your current hard-coded ones)
+        self.declare_parameter('yellow_hsv_lower', [20, 79, 165])
+        self.declare_parameter('yellow_hsv_upper', [40, 255, 255])
+        self.declare_parameter('white_hsv_lower',  [0, 0, 238])
+        self.declare_parameter('white_hsv_upper',  [255, 57, 255])
+
+        #only publish things you really need
+        self.declare_parameter('publish_bev_image', False)
+        self.declare_parameter('publish_calib_image', False)
+        self.declare_parameter('publish_combined_masks', False)
+
+        self.publish_bev_image = self.get_parameter('publish_bev_image').value
+        self.publish_calib_image = self.get_parameter('publish_calib_image').value
+        self.publish_split_masks = self.get_parameter('publish_combined_masks').value
+
+        #mimic rospy.Rate(10)
+        self.declare_parameter('max_rate_hz', 20.0)
+        self._min_period = 1.0 / float(
+            self.get_parameter('max_rate_hz').get_parameter_value().double_value
+        )
+        self._last_processed_time = self.get_clock().now()
+
         # Read parameters
         image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.bev_width = self.get_parameter('bev_width').get_parameter_value().integer_value
         self.bev_height = self.get_parameter('bev_height').get_parameter_value().integer_value
         self.output_frame = self.get_parameter('output_frame').get_parameter_value().string_value
 
+        # Convert HSV parameter lists to NumPy arrays (uint8)
+        yellow_lower_param = self.get_parameter('yellow_hsv_lower').get_parameter_value().integer_array_value
+        yellow_upper_param = self.get_parameter('yellow_hsv_upper').get_parameter_value().integer_array_value
+        white_lower_param  = self.get_parameter('white_hsv_lower').get_parameter_value().integer_array_value
+        white_upper_param  = self.get_parameter('white_hsv_upper').get_parameter_value().integer_array_value
+
+        self.lower_yellow = np.array(yellow_lower_param, dtype=np.uint8)
+        self.upper_yellow = np.array(yellow_upper_param, dtype=np.uint8)
+        self.lower_white  = np.array(white_lower_param,  dtype=np.uint8)
+        self.upper_white  = np.array(white_upper_param,  dtype=np.uint8)
+
         self.bridge = CvBridge()
 
         # --- Subscriptions / publishers ---
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,   # no retries
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1                                        # drop old frames
+        )
+
         self.image_sub = self.create_subscription(
             Image,
             image_topic,
             self.image_callback,
-            10
-        )
+            sensor_qos
+)
 
         self.bev_pub = self.create_publisher(Image, 'lane_bev/image', 10)
         self.mask_pub = self.create_publisher(Image, 'lane_bev/mask', 10)
@@ -61,15 +101,15 @@ class LaneBevNode(Node):
             CameraInfo,
             '/camera/camera_info',   # adjust if your topic is different
             self.camera_info_callback,
-            1
+            sensor_qos
         )
 
         # --- Homography (old V-shape style) ---
         # src: trapezoid in original (UNDISTORTED) image where the floor is visible
         # -> you can tune these in lane_bev/image_calib
         self.src_points = np.float32([
-            [195, 220],  # top-left in image
-            [435, 220],  # top-right
+            [235, 220],  # top-left in image
+            [410, 220],  # top-right
             [40,  470],  # bottom-left
             [600, 470],  # bottom-right
         ])
@@ -162,6 +202,13 @@ class LaneBevNode(Node):
     # ----------------- main image callback -----------------
 
     def image_callback(self, msg: Image):
+        now = self.get_clock().now()
+        dt = (now - self._last_processed_time).nanoseconds * 1e-9
+        if dt < self._min_period:
+            # drop this frame – too soon
+            return
+        self._last_processed_time = now
+
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as e:
@@ -199,13 +246,14 @@ class LaneBevNode(Node):
             )
 
         # Publish calibration image
-        try:
-            calib_msg = self.bridge.cv2_to_imgmsg(debug_img, encoding='bgr8')
-            calib_msg.header = msg.header
-            # keep camera frame_id here – this is the *camera* frame
-            self.calib_pub.publish(calib_msg)
-        except Exception as e:
-            self.get_logger().error(f'Error publishing calibration image: {e}')
+        if self.publish_calib_image:
+            try:
+                calib_msg = self.bridge.cv2_to_imgmsg(debug_img, encoding='bgr8')
+                calib_msg.header = msg.header
+                # keep camera frame_id here – this is the *camera* frame
+                self.calib_pub.publish(calib_msg)
+            except Exception as e:
+                self.get_logger().error(f'Error publishing calibration image: {e}')
 
         # --- Compute homography if needed ---
         if self.M is None:
@@ -223,14 +271,10 @@ class LaneBevNode(Node):
         hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV)
 
         # Yellow lane
-        lower_yellow = np.array([20,  80,  80], dtype=np.uint8)
-        upper_yellow = np.array([35, 255, 255], dtype=np.uint8)
-        mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        mask_yellow = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
 
         # White lane: high V, low saturation
-        lower_white = np.array([0,   0, 200], dtype=np.uint8)
-        upper_white = np.array([180, 50, 255], dtype=np.uint8)
-        mask_white = cv2.inRange(hsv, lower_white, upper_white)
+        mask_white = cv2.inRange(hsv, self.lower_white, self.upper_white)
 
         lane_mask = cv2.bitwise_or(mask_yellow, mask_white)
 
@@ -240,13 +284,14 @@ class LaneBevNode(Node):
         lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_DILATE, kernel, iterations=1)
 
         # --- Publish BEV image ---
-        try:
-            bev_msg = self.bridge.cv2_to_imgmsg(bev, encoding='bgr8')
-            bev_msg.header = msg.header
-            bev_msg.header.frame_id = self.output_frame   # override frame
-            self.bev_pub.publish(bev_msg)
-        except Exception as e:
-            self.get_logger().error(f'Error publishing BEV image: {e}')
+        if self.publish_bev_image:
+            try:
+                bev_msg = self.bridge.cv2_to_imgmsg(bev, encoding='bgr8')
+                bev_msg.header = msg.header
+                bev_msg.header.frame_id = self.output_frame   # override frame
+                self.bev_pub.publish(bev_msg)
+            except Exception as e:
+                self.get_logger().error(f'Error publishing BEV image: {e}')
 
         # --- Publish combined mask ---
         try:

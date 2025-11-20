@@ -87,26 +87,109 @@ class LaneGridNode(Node):
             f'lane_grid_node started. map_topic={self.map_topic}, '
             f'bev_mask_topic={self.bev_mask_topic}, base_frame={self.base_frame}'
         )
+    
+    
+    def remap_lane_grid(self, old_info: MapMetaData, new_info: MapMetaData):
+        """Remap existing lane_grid from old map geometry into new map geometry."""
+
+        if self.lane_grid is None:
+            self.init_lane_grid(new_info)
+            return
+
+        old_w = old_info.width
+        old_h = old_info.height
+        new_w = new_info.width
+        new_h = new_info.height
+
+        # Resolution should be the same if we get here
+        res = new_info.resolution
+
+        origin_old_x = old_info.origin.position.x
+        origin_old_y = old_info.origin.position.y
+        origin_new_x = new_info.origin.position.x
+        origin_new_y = new_info.origin.position.y
+
+        old_grid = self.lane_grid
+        new_grid = [-1] * (new_w * new_h)
+
+        for row in range(old_h):
+            for col in range(old_w):
+                idx_old = row * old_w + col
+                val = old_grid[idx_old]
+                if val == -1:
+                    # unknown, nothing to copy
+                    continue
+
+                # World coords of the center of the old cell
+                x = origin_old_x + (col + 0.5) * res
+                y = origin_old_y + (row + 0.5) * res
+
+                # New grid indices
+                new_col = int((x - origin_new_x) / res)
+                new_row = int((y - origin_new_y) / res)
+
+                if 0 <= new_col < new_w and 0 <= new_row < new_h:
+                    idx_new = new_row * new_w + new_col
+                    new_grid[idx_new] = val
+
+        self.lane_grid = new_grid
+        self.map_info = new_info
+
+        self.get_logger().warn(
+            f'Remapped lane grid from {old_w}x{old_h} to {new_w}x{new_h}, '
+            f'origin ({origin_old_x:.3f},{origin_old_y:.3f}) -> '
+            f'({origin_new_x:.3f},{origin_new_y:.3f})'
+        )
 
     def map_callback(self, msg: OccupancyGrid):
-        # Initialize or update geometry if map changes
         info = msg.info
+
+        # First time: initialize lane grid with this geometry
         if self.map_info is None:
             self.map_info = info
             self.init_lane_grid(info)
             self.get_logger().info(
                 f'Initialized lane grid: {info.width}x{info.height}, res={info.resolution}'
             )
+            return
+
+        # If resolution changed, it's safer to reset everything
+        if info.resolution != self.map_info.resolution:
+            self.get_logger().warn(
+                f'Map resolution changed '
+                f'({self.map_info.resolution} -> {info.resolution}), '
+                f'reinitializing lane grid (lanes will be cleared).'
+            )
+            self.map_info = info
+            self.init_lane_grid(info)
+            return
+
+        # Same resolution, but geometry (width/height/origin) might change
+        size_changed = (
+            info.width != self.map_info.width or
+            info.height != self.map_info.height
+        )
+
+        origin_changed = (
+            info.origin.position.x != self.map_info.origin.position.x or
+            info.origin.position.y != self.map_info.origin.position.y
+        )
+
+        if size_changed or origin_changed:
+            # Grow / shift map -> remap lane_grid, don't lose info
+            self.get_logger().warn(
+                f'Map geometry changed '
+                f'({self.map_info.width}x{self.map_info.height}@{self.map_info.resolution} '
+                f'-> {info.width}x{info.height}@{info.resolution}), '
+                f'remapping lane grid.'
+            )
+            old_info = self.map_info
+            self.remap_lane_grid(old_info, info)
         else:
-            # If geometry changes (rare with Cartographer), reinit
-            if (info.width != self.map_info.width or
-                    info.height != self.map_info.height or
-                    info.resolution != self.map_info.resolution or
-                    info.origin.position.x != self.map_info.origin.position.x or
-                    info.origin.position.y != self.map_info.origin.position.y):
-                self.get_logger().warn('Map geometry changed, reinitializing lane grid.')
-                self.map_info = info
-                self.init_lane_grid(info)
+            # Only occupancy data changed, keep geometry and lane_grid
+            self.map_info = info
+
+
 
     def init_lane_grid(self, info: MapMetaData):
         size = info.width * info.height
