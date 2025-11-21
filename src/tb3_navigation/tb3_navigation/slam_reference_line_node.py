@@ -25,7 +25,7 @@ class SlamReferenceLineNode(Node):
         self.declare_parameter('segment2_length', 0.4)
 
         # Default-Winkel in Grad, falls noch keine Orientation-Message empfangen wurde
-        self.declare_parameter('default_angle_deg', 72.0)
+        self.declare_parameter('default_angle_deg', 0.0)
 
         # Marker-Topic
         self.declare_parameter('marker_topic', 'slam_reference_line')
@@ -82,7 +82,7 @@ class SlamReferenceLineNode(Node):
         L1 = self.get_parameter('segment1_length').get_parameter_value().double_value
         L2 = self.get_parameter('segment2_length').get_parameter_value().double_value
 
-        angle_rad = self.current_yaw_rad  # immer letzter empfangener Wert
+        angle_rad = -self.current_yaw_rad  # immer letzter empfangener Wert
 
         # Punkte definieren:
         # p0: Ursprung
