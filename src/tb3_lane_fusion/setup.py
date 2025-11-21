@@ -35,6 +35,8 @@ setup(
         'lane_map_node = tb3_lane_fusion.lane_map_node:main',
         'lane_grid_node = tb3_lane_fusion.lane_grid_node:main',
         'white_yellow_red_calibration = tb3_lane_fusion.white_yellow_red_calibration:main',
+        'lane_calib_rect_node = tb3_lane_fusion.lane_calib_rect_node:main',
+        'lane_follower_node = tb3_lane_fusion.lane_follower_node:main',
         ],
     },
 )
