@@ -9,7 +9,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from std_msgs.msg import Bool, Float32MultiArray
 from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge, CvBridgeError
@@ -101,9 +101,10 @@ class RedSignDetector(Node):
 
         # --- Bridge & Publisher/Sub ---
         self.bridge = CvBridge()
+        self._window = "camera-reader"
 
         self.image_sub = self.create_subscription(
-            Image,
+            CompressedImage,
             image_topic,
             self.image_callback,
             10
@@ -126,9 +127,10 @@ class RedSignDetector(Node):
 
     # ----------------- Callbacks -----------------
 
-    def image_callback(self, msg: Image):
+    def image_callback(self, msg):
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            cv_image = self.bridge.compressed_imgmsg_to_cv2(msg)
+            # cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except CvBridgeError as e:
             self.get_logger().error(f"CvBridge Fehler: {e}")
             return
@@ -190,7 +192,7 @@ class RedSignDetector(Node):
         center_x = width / 2.0
         dx_pixels = cx - center_x
         norm_x = dx_pixels / center_x           # [-1, 1]
-        yaw_rad = -norm_x * (hfov_rad / 2.0)
+        yaw_rad = norm_x * (hfov_rad / 2.0)
 
         # Vertikale Abweichung (Pitch) – der Vollständigkeit halber
         center_y = height / 2.0

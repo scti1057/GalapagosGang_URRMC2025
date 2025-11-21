@@ -1,7 +1,7 @@
 red_sign_detector:
   ros__parameters:
     # Kamera-Topic
-    image_topic: "/camera/image_raw"
+    image_topic: "/camera/image_raw/compressed"
     # LiDAR-Topic
     scan_topic: "/scan"
     use_lidar_distance: true
