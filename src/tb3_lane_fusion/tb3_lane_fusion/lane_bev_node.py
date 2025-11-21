@@ -4,8 +4,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
-from sensor_msgs.msg import Image, CameraInfo
-from cv_bridge import CvBridge
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
+from cv_bridge import CvBridge, CvBridgeError
 
 import cv2
 import numpy as np
@@ -16,7 +16,7 @@ class LaneBevNode(Node):
         super().__init__('lane_bev_node')
 
         # --- Parameters ---
-        self.declare_parameter('image_topic', '/camera/image_raw')
+        self.declare_parameter('image_topic', '/camera/image_raw/compressed')
         self.declare_parameter('bev_width', 810)
         self.declare_parameter('bev_height', 480)
         self.declare_parameter('output_frame', 'base_footprint')
@@ -34,6 +34,19 @@ class LaneBevNode(Node):
         self.declare_parameter('white_hsv_lower',  [0, 0, 238])
         self.declare_parameter('white_hsv_upper',  [255, 57, 255])
 
+                # Extra noise filtering by blob area
+        # (only keep connected components with at least this many pixels)
+        self.declare_parameter('yellow_min_blob_area', 1000)
+        self.declare_parameter('white_min_blob_area', 1000)
+
+        self.yellow_min_blob_area = int(
+            self.get_parameter('yellow_min_blob_area').get_parameter_value().integer_value
+        )
+        self.white_min_blob_area = int(
+            self.get_parameter('white_min_blob_area').get_parameter_value().integer_value
+        )
+
+
         #only publish things you really need
         self.declare_parameter('publish_bev_image', False)
         self.declare_parameter('publish_calib_image', False)
@@ -41,10 +54,10 @@ class LaneBevNode(Node):
 
         self.publish_bev_image = self.get_parameter('publish_bev_image').value
         self.publish_calib_image = self.get_parameter('publish_calib_image').value
-        self.publish_split_masks = self.get_parameter('publish_combined_masks').value
+        self.publish_combined_masks = self.get_parameter('publish_combined_masks').value
 
         #mimic rospy.Rate(10)
-        self.declare_parameter('max_rate_hz', 20.0)
+        self.declare_parameter('max_rate_hz', 10.0)
         self._min_period = 1.0 / float(
             self.get_parameter('max_rate_hz').get_parameter_value().double_value
         )
@@ -77,11 +90,11 @@ class LaneBevNode(Node):
         )
 
         self.image_sub = self.create_subscription(
-            Image,
+            CompressedImage,
             image_topic,
             self.image_callback,
             sensor_qos
-)
+        )
 
         self.bev_pub = self.create_publisher(Image, 'lane_bev/image', 10)
         self.mask_pub = self.create_publisher(Image, 'lane_bev/mask', 10)
@@ -108,8 +121,8 @@ class LaneBevNode(Node):
         # src: trapezoid in original (UNDISTORTED) image where the floor is visible
         # -> you can tune these in lane_bev/image_calib
         self.src_points = np.float32([
-            [235, 220],  # top-left in image
-            [410, 220],  # top-right
+            [239, 220],  # top-left in image
+            [408, 220],  # top-right
             [40,  470],  # bottom-left
             [600, 470],  # bottom-right
         ])
@@ -199,9 +212,32 @@ class LaneBevNode(Node):
             )
         self.M = cv2.getPerspectiveTransform(self.src_points, self.dst_points)
 
+    def filter_small_blobs(self, mask: np.ndarray, min_area: int) -> np.ndarray:
+        """
+        Keep only connected components (blobs) with area >= min_area.
+        mask: binary (0/255) uint8 image.
+        """
+        # Connected components: background is label 0
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+
+        if num_labels <= 1:
+            # Only background, nothing to do
+            return mask
+
+        # stats: [label, CC_STAT_*]; index 0 is background
+        filtered = np.zeros_like(mask)
+
+        for label in range(1, num_labels):
+            area = stats[label, cv2.CC_STAT_AREA]
+            if area >= min_area:
+                filtered[labels == label] = 255
+
+        return filtered
+
+
     # ----------------- main image callback -----------------
 
-    def image_callback(self, msg: Image):
+    def image_callback(self, msg: CompressedImage):
         now = self.get_clock().now()
         dt = (now - self._last_processed_time).nanoseconds * 1e-9
         if dt < self._min_period:
@@ -210,9 +246,13 @@ class LaneBevNode(Node):
         self._last_processed_time = now
 
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            # Decode JPEG/PNG from sensor_msgs/CompressedImage
+            cv_image = self.bridge.compressed_imgmsg_to_cv2(msg)
+        except CvBridgeError as e:
+            self.get_logger().error(f'CvBridge error (compressed): {e}')
+            return
         except Exception as e:
-            self.get_logger().error(f'cv_bridge error: {e}')
+            self.get_logger().error(f'Unexpected error decoding compressed image: {e}')
             return
 
         # --- undistort fisheye/pinhole image ---
@@ -226,34 +266,34 @@ class LaneBevNode(Node):
         # --- end undistort ---
 
         # --- Debug: draw BEV trapezoid on original (undistorted) image ---
-        debug_img = cv_image.copy()
-
-        src_pts_int = self.src_points.astype(np.int32).reshape(-1, 1, 2)
-
-        # Draw polygon edges (red)
-        cv2.polylines(debug_img, [src_pts_int], isClosed=True, color=(0, 0, 255), thickness=2)
-
-        # Draw corner points with small circles and labels
-        labels = ['P0', 'P1', 'P2', 'P3']
-        for i, (x, y) in enumerate(self.src_points):
-            x_i, y_i = int(x), int(y)
-            cv2.circle(debug_img, (x_i, y_i), 5, (0, 255, 0), -1)  # green dot
-            cv2.putText(
-                debug_img, labels[i],
-                (x_i + 5, y_i - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                (255, 255, 255), 1, cv2.LINE_AA
-            )
-
-        # Publish calibration image
+        # --- Debug: draw BEV trapezoid on original (undistorted) image ---
         if self.publish_calib_image:
+            debug_img = cv_image.copy()
+
+            src_pts_int = self.src_points.astype(np.int32).reshape(-1, 1, 2)
+
+            # Draw polygon edges (red)
+            cv2.polylines(debug_img, [src_pts_int], isClosed=True, color=(0, 0, 255), thickness=2)
+
+            # Draw corner points with small circles and labels
+            labels = ['P0', 'P1', 'P2', 'P3']
+            for i, (x, y) in enumerate(self.src_points):
+                x_i, y_i = int(x), int(y)
+                cv2.circle(debug_img, (x_i, y_i), 5, (0, 255, 0), -1)  # green dot
+                cv2.putText(
+                    debug_img, labels[i],
+                    (x_i + 5, y_i - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (255, 255, 255), 1, cv2.LINE_AA
+                )
+
             try:
                 calib_msg = self.bridge.cv2_to_imgmsg(debug_img, encoding='bgr8')
                 calib_msg.header = msg.header
-                # keep camera frame_id here – this is the *camera* frame
                 self.calib_pub.publish(calib_msg)
             except Exception as e:
                 self.get_logger().error(f'Error publishing calibration image: {e}')
+        # --- end calib debug ---
 
         # --- Compute homography if needed ---
         if self.M is None:
@@ -270,18 +310,43 @@ class LaneBevNode(Node):
         # --- HSV lane color filtering ---
         hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV)
 
-        # Yellow lane
+        # Raw binary masks (0 or 255)
         mask_yellow = cv2.inRange(hsv, self.lower_yellow, self.upper_yellow)
+        mask_white  = cv2.inRange(hsv, self.lower_white,  self.upper_white)
 
-        # White lane: high V, low saturation
-        mask_white = cv2.inRange(hsv, self.lower_white, self.upper_white)
-
-        lane_mask = cv2.bitwise_or(mask_yellow, mask_white)
-
-        # Morphological cleanup
+        # --- Morphology per lane (remove speckles, fill small gaps) ---
         kernel = np.ones((3, 3), np.uint8)
-        lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_DILATE, kernel, iterations=1)
+
+        # Yellow lane: open (remove noise) + dilate (thicken line)
+        mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN,  kernel, iterations=1)
+        mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_DILATE, kernel, iterations=1)
+
+        # White lane: same idea
+        mask_white  = cv2.morphologyEx(mask_white,  cv2.MORPH_OPEN,  kernel, iterations=1)
+        mask_white  = cv2.morphologyEx(mask_white,  cv2.MORPH_DILATE, kernel, iterations=1)
+
+        # --- Remove small blobs by area threshold ---
+        mask_yellow = self.filter_small_blobs(mask_yellow, self.yellow_min_blob_area)
+        mask_white  = self.filter_small_blobs(mask_white,  self.white_min_blob_area)
+
+
+        # --- Combined mask only if requested ---
+        if self.publish_combined_masks:
+            lane_mask = cv2.bitwise_or(mask_yellow, mask_white)
+
+            kernel = np.ones((3, 3), np.uint8)
+            lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            lane_mask = cv2.morphologyEx(lane_mask, cv2.MORPH_DILATE, kernel, iterations=1)
+
+            try:
+                mask_msg = self.bridge.cv2_to_imgmsg(lane_mask, encoding='mono8')
+                mask_msg.header = msg.header
+                mask_msg.header.frame_id = self.output_frame
+                self.mask_pub.publish(mask_msg)
+            except Exception as e:
+                self.get_logger().error(f'Error publishing mask image: {e}')
+        # --- end combined mask ---
+
 
         # --- Publish BEV image ---
         if self.publish_bev_image:
@@ -292,15 +357,6 @@ class LaneBevNode(Node):
                 self.bev_pub.publish(bev_msg)
             except Exception as e:
                 self.get_logger().error(f'Error publishing BEV image: {e}')
-
-        # --- Publish combined mask ---
-        try:
-            mask_msg = self.bridge.cv2_to_imgmsg(lane_mask, encoding='mono8')
-            mask_msg.header = msg.header
-            mask_msg.header.frame_id = self.output_frame
-            self.mask_pub.publish(mask_msg)
-        except Exception as e:
-            self.get_logger().error(f'Error publishing mask image: {e}')
 
         # --- Publish white and yellow masks separately ---
         try:

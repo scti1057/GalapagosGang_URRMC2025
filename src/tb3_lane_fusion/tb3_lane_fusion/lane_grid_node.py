@@ -6,6 +6,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.time import Time
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from sensor_msgs.msg import Image
 from nav_msgs.msg import OccupancyGrid
@@ -37,7 +38,14 @@ class LaneGridNode(Node):
         self.declare_parameter('y_left_m', -0.5)
         self.declare_parameter('y_right_m', 0.5)
 
-        self.declare_parameter('pixel_step', 4)
+        self.declare_parameter('pixel_step', 8)
+
+        #Run rate
+        self.declare_parameter('max_rate_hz', 5.0)
+        self._min_period = 1.0 / float(
+            self.get_parameter('max_rate_hz').get_parameter_value().double_value
+        )
+        self._last_time = self.get_clock().now()
 
         self.map_topic = self.get_parameter('map_topic').get_parameter_value().string_value
         self.bev_mask_topic = self.get_parameter('bev_mask_topic').get_parameter_value().string_value
@@ -65,19 +73,24 @@ class LaneGridNode(Node):
         self.map_info: MapMetaData | None = None
         self.lane_grid = None  # will be a flat list of int8
 
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1
+        )
         # Subscribers
         self.map_sub = self.create_subscription(
             OccupancyGrid,
             self.map_topic,
             self.map_callback,
-            10
+            sensor_qos
         )
 
         self.mask_sub = self.create_subscription(
             Image,
             self.bev_mask_topic,
             self.mask_callback,
-            10
+            sensor_qos
         )
 
         # Publisher for lane occupancy grid
