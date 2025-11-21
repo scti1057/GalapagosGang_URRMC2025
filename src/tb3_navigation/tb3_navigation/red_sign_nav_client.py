@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 
 import math
+from typing import Optional
 
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
-from std_msgs.msg import Float32MultiArray
 
 
 class RedSignNavClient(Node):
@@ -19,109 +19,106 @@ class RedSignNavClient(Node):
         # Nav2-Action-Name (bei Turtlebot3-Nav2 normalerweise: 'navigate_to_pose')
         self.declare_parameter('nav_action_name', 'navigate_to_pose')
 
-        # Frame für das Ziel (erstmal map)
-        self.declare_parameter('frame_id', 'map')
+        # Topic, auf dem der Localizer die Schild-Pose publish't
+        self.declare_parameter('target_pose_topic', '/red_sign_goal_pose')
 
-        # Geometrie der "zweiten Linie" (wie bei deiner Referenzlinie)
-        self.declare_parameter('segment1_length', 0.31)   # 31 cm vor dem Roboter
-        self.declare_parameter('segment2_length', 0.4)    # z.B. 0.5 m weiter
+        # Topic für Geschwindigkeitsbefehle
+        self.declare_parameter('cmd_vel_topic', '/cmd_vel')
 
-        # Orientation-Topic (gleich wie beim RedSignDetector & Referenz-Line-Node)
-        self.declare_parameter('orient_topic', '/red_sign_orient')
+        # Vorwärtsgeschwindigkeit, solange noch keine Pose bekannt ist
+        self.declare_parameter('pre_pose_speed', 0.03)  # m/s
 
         nav_action_name = self.get_parameter('nav_action_name').get_parameter_value().string_value
-        self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
-
-        self.L1 = self.get_parameter('segment1_length').get_parameter_value().double_value
-        self.L2 = self.get_parameter('segment2_length').get_parameter_value().double_value
-
-        self.current_yaw_rad = None
-        self.last_feedback = None
-
-        orientation_topic = self.get_parameter('orient_topic').get_parameter_value().string_value
+        target_pose_topic = self.get_parameter('target_pose_topic').get_parameter_value().string_value
+        cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
+        self.pre_pose_speed = self.get_parameter('pre_pose_speed').get_parameter_value().double_value
 
         # ActionClient für Nav2
         self._action_client = ActionClient(self, NavigateToPose, nav_action_name)
 
-        # Subscriber für Orientation (Float32MultiArray: [yaw_rad, pitch_rad])
-        self.orientation_sub = self.create_subscription(
-            Float32MultiArray,
-            orientation_topic,
-            self.orientation_callback,
+        # Publisher für direkte Geschwindigkeitsbefehle (vor erster Pose)
+        self.cmd_vel_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
+
+        # letzte empfangene Zielpose
+        self.latest_target_pose: Optional[PoseStamped] = None
+
+        # Flags
+        self.pose_received = False   # Haben wir schon eine Pose bekommen?
+        self.goal_sent = False       # Haben wir schon ein Nav2-Goal geschickt?
+
+        # Subscriber für die Schild-Pose
+        self.target_pose_sub = self.create_subscription(
+            PoseStamped,
+            target_pose_topic,
+            self.target_pose_callback,
             10
         )
 
-        # Flag: nur ein Goal schicken
-        self.goal_sent = False
+        # Timer: läuft z.B. mit 10 Hz und steuert Bewegung + Nav2-Goal
+        self.timer = self.create_timer(0.1, self.timer_callback)
 
-        # Timer: wiederholt prüfen, ob Server da ist und dann EIN Goal schicken
-        self.timer = self.create_timer(1.0, self.timer_callback)
+        self.last_feedback = None
 
         self.get_logger().info(
             f"RedSignNavClient gestartet.\n"
-            f"  Action-Server: {nav_action_name}\n"
-            f"  Orientation-Topic: {orientation_topic}\n"
+            f"  Action-Server:      {nav_action_name}\n"
+            f"  Target-Pose-Topic:  {target_pose_topic}\n"
+            f"  cmd_vel_topic:      {cmd_vel_topic}\n"
+            f"  pre_pose_speed:     {self.pre_pose_speed} m/s"
         )
 
-    # --- Orientation-Callback ---
-    def orientation_callback(self, msg: Float32MultiArray):
-        if len(msg.data) >= 1:
-            self.current_yaw_rad = msg.data[0]  # yaw_rad
-            # self.get_logger().info(
-            #     f"Orientation erhalten: yaw_rad={self.current_yaw_rad:.3f} rad "
-            #     f"({math.degrees(self.current_yaw_rad):.1f}°)"
-            # )
-        else:
-            self.get_logger().warn(
-                "Orientation-Message erhalten, aber msg.data ist zu kurz!"
-            )
+    # --- Callback: neue Zielpose vom Localizer ---
+    def target_pose_callback(self, msg: PoseStamped):
+        self.latest_target_pose = msg
+        self.pose_received = True
+        self.get_logger().info(
+            f"Neue Schild-Pose empfangen: frame={msg.header.frame_id}, "
+            f"x={msg.pose.position.x:.3f}, y={msg.pose.position.y:.3f}"
+        )
 
-    # --- Timer: versucht EIN Nav-Goal zu schicken ---
+    # --- Timer: steuert Vorwärtsfahren + Nav2-Goal ---
     def timer_callback(self):
+        # Wenn wir schon ein Nav2-Goal geschickt haben, machen wir hier nichts mehr
         if self.goal_sent:
             return
 
-        if not self._action_client.wait_for_server(timeout_sec=0.1):
-            self.get_logger().warn("Nav2-Action-Server noch nicht verfügbar...")
+        # Fall 1: Noch keine Pose -> langsam vorwärts fahren
+        if not self.pose_received:
+            twist = Twist()
+            twist.linear.x = self.pre_pose_speed
+            self.cmd_vel_pub.publish(twist)
+            self.get_logger().debug(
+                f"Noch keine Schild-Pose -> fahre mit {self.pre_pose_speed:.3f} m/s vorwärts."
+            )
             return
 
-        self.send_goal()
-        self.get_logger().info("Goal geschickt!")
+        # Fall 2: Pose vorhanden, aber noch kein Nav2-Goal geschickt:
+        # -> sofort stoppen
+        stop = Twist()  # alles 0
+        self.cmd_vel_pub.publish(stop)
+
+        # Warten, bis Nav2-Action-Server verfügbar ist
+        if not self._action_client.wait_for_server(timeout_sec=0.1):
+            self.get_logger().warn("Nav2-Action-Server noch nicht verfügbar, warte...")
+            return
+
+        # Goal auf Basis der zuletzt empfangenen Pose schicken
+        if self.latest_target_pose is None:
+            self.get_logger().warn("Pose-Flag gesetzt, aber latest_target_pose ist None?")
+            return
+
+        self.send_goal(self.latest_target_pose)
         self.goal_sent = True
 
-    def send_goal(self):
-        angle_rad = self.current_yaw_rad
-
-        if not angle_rad:
-            return
-
-        # Punkt auf der zweiten Linie (wie in deiner Referenzlinie):
-        # p0 = (0,0)
-        # p1 = (L1, 0)
-        # p2 = p1 + (L2 * cos(angle), L2 * sin(angle))
-        goal_x = self.L1 + self.L2 * math.cos(angle_rad)
-        goal_y =           self.L2 * math.sin(angle_rad)
-
-        yaw_rad = angle_rad
-
-        pose = PoseStamped()
-        pose.header.frame_id = self.frame_id
-        pose.header.stamp = self.get_clock().now().to_msg()
-
-        pose.pose.position.x = goal_x
-        pose.pose.position.y = goal_y
-        pose.pose.position.z = 0.0
-
-        # Yaw -> Quaternion (2D)
-        pose.pose.orientation.z = math.sin(yaw_rad / 2.0)
-        pose.pose.orientation.w = math.cos(yaw_rad / 2.0)
-
+    def send_goal(self, target_pose: PoseStamped):
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = pose
+        goal_msg.pose = target_pose
 
         self.get_logger().info(
-            f"Sende Nav2-Goal auf zweiter Linie:\n"
-            f"  x={goal_x:.3f}, y={goal_y:.3f}, yaw={math.degrees(yaw_rad):.1f}°"
+            f"Sende Nav2-Goal zur Schild-Pose:\n"
+            f"  frame={target_pose.header.frame_id}, "
+            f"x={target_pose.pose.position.x:.3f}, "
+            f"y={target_pose.pose.position.y:.3f}"
         )
 
         send_goal_future = self._action_client.send_goal_async(
@@ -153,7 +150,7 @@ class RedSignNavClient(Node):
     def result_callback(self, future):
         result = future.result().result
         self.get_logger().info(f"Nav2-Result: Status={result.result}")
-        # Hier könntest du später weitere Logik einbauen
+        # Hier könntest du später noch Logik einbauen (z.B. neuen Modus starten)
 
 
 def main(args=None):
