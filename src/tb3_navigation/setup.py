@@ -32,6 +32,7 @@ setup(
             'red_sign_detector = tb3_navigation.red_sign_detector:main',
             'red_sign_nav_client = tb3_navigation.red_sign_nav_client:main',
             'slam_reference_line_node = tb3_navigation.slam_reference_line_node:main',
+            'red_sign_localizer = tb3_navigation.red_sign_localizer:main',
         ],
     },
 )
