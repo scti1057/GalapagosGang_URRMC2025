@@ -1,0 +1,37 @@
+white:
+  hl: 0
+  sl: 0
+  vl: 238
+  hh: 255
+  sh: 57
+  vh: 255
+
+yellow:
+  hl: 20
+  sl: 79
+  vl: 165
+  hh: 40
+  sh: 255
+  vh: 255
+
+# Polygon closer to the robot (thinner, near)
+lane_image_near:
+  top_left_x: 2
+  top_left_y: 400
+  top_right_x: 638
+  top_right_y: 400
+  bottom_right_x: 638
+  bottom_right_y: 478
+  bottom_left_x: 2
+  bottom_left_y: 478
+
+# Polygon further away (bigger, far)
+lane_image_far:
+  top_left_x: 80
+  top_left_y: 200
+  top_right_x: 560
+  top_right_y: 200
+  bottom_right_x: 620
+  bottom_right_y: 400
+  bottom_left_x: 20
+  bottom_left_y: 400

@@ -1,0 +1,34 @@
+red1:
+  # Lower red hue range (e.g. 0-10 deg)
+  hl: 0
+  sl: 120
+  vl: 80
+  hh: 10
+  sh: 255
+  vh: 255
+
+red2:
+  # Upper red hue range (e.g. 170-180 deg)
+  hl: 170
+  sl: 120
+  vl: 80
+  hh: 180
+  sh: 255
+  vh: 255
+
+detect:
+  # Minimum area (pixels) of the largest connected red blob
+  # to say "we have a red sign"
+  min_pixels: 300
+
+  # Area threshold to consider the sign "big"
+  big_pixels: 25000
+
+  # Remove tiny blobs below this area before deciding
+  min_blob_pixels: 50
+
+  # Morphology kernel size for noise cleanup
+  kernel_size: 3
+
+  # How many times to publish red_sign_big when it changes value
+  big_state_publish_repeats: 10

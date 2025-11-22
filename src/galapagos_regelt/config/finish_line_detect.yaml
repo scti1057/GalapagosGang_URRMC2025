@@ -1,0 +1,29 @@
+# Polygon where we look for the finish line (similar structure to lane polygons)
+finish_line_roi:
+  top_left_x: 80
+  top_left_y: 220
+  top_right_x: 560
+  top_right_y: 220
+  bottom_right_x: 640
+  bottom_right_y: 290
+  bottom_left_x: 0
+  bottom_left_y: 290
+
+white:
+  hl: 0
+  sl: 0
+  vl: 238
+  hh: 255
+  sh: 57
+  vh: 255
+
+# Detection parameters
+finish_line:
+  # minimum average number of black/white transitions per row
+  min_mean_transitions: 6
+
+  # minimum number of rows inside the ROI that are actually considered
+  min_active_rows: 20
+
+  # minimum size (in pixels) of connected white blobs to keep
+  min_blob_pixels: 300

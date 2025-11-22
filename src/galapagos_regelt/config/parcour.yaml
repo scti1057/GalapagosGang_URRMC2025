@@ -1,0 +1,18 @@
+parcour:
+  # General
+  max_rate_hz: 10.0
+  image_width_px: 640.0
+
+  # Planning
+  replan_interval_s: 1.0          # time between re-plans (later)
+  min_clear_distance_m: 0.3       # min lidar distance to consider path clear
+  forward_step_distance_m: 0.3    # how far to drive per step (later)
+
+  # Yaw alignment
+  yaw_align_tolerance_deg: 3.0    # considered aligned if within this
+  yaw_max_turn_deg: 90.0          # max allowed turn per step (safety)
+
+  # Debug / behavior flags
+  debug_logging: true
+  use_lidar_for_planning: true     # later: decide from r_lidar
+  use_red_for_planning: true       # later: use x_red for planning

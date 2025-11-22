@@ -1,0 +1,14 @@
+pid:
+  kp: 5.0
+  ki: 0.1
+  kd: 0.4
+
+speed:
+  v_min: 0.03    # minimum forward speed [m/s]
+  v_max: 0.08    # maximum forward speed [m/s]
+
+limits:
+  omega_max: 1.0 # max absolute angular speed [rad/s]
+
+image:
+  width: 640.0   # image width in pixels (update if your camera is different)
