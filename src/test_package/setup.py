@@ -24,7 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'sensor_fusion_birdseye = test_package.sensor_fusion_birdseye:main'
+            'sensor_fusion_birdseye = test_package.sensor_fusion_birdseye:main',
+            'image_recorder_node = test_package.image_recorder_node:main',
         ],
     },
 )
