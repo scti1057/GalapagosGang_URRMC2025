@@ -17,9 +17,9 @@ yellow:
 # Polygon closer to the robot (thinner, near)
 lane_image_near:
   top_left_x: 2
-  top_left_y: 400
+  top_left_y: 360
   top_right_x: 638
-  top_right_y: 400
+  top_right_y: 360
   bottom_right_x: 638
   bottom_right_y: 478
   bottom_left_x: 2

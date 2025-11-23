@@ -3,7 +3,11 @@
 import os
 import math
 import yaml
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+import cv2
+from cv_bridge import CvBridge
+from sensor_msgs.msg import CompressedImage
 
 import rclpy
 from rclpy.node import Node
@@ -15,47 +19,73 @@ from ament_index_python.packages import get_package_share_directory
 
 class ParcourNode(Node):
     """
-    High-level parcours planner / sequencer.
+    High-level parcours planner / sequencer + debug visualizer.
 
     Subscribes:
-      - r_lidar          (Float64MultiArray)  : [deg1, dist1, deg2, dist2, ...]
-      - x_red            (Float64)           : center of red sign in pixels
-      - red_sign_big     (Bool)              : True while we are in parcours mode
-      - lane/x_white_far (Float64)
-      - lane/x_white_near(Float64)
-      - lane/x_yellow_far(Float64)
+      - r_lidar           (Float64MultiArray): [deg1, dist1, deg2, dist2, ...]
+      - x_red             (Float64)         : center of red sign in pixels
+      - red_sign_big      (Bool)            : TRUE while we're in parcours mode
+      - lane/x_white_far  (Float64)
+      - lane/x_white_near (Float64)
+      - lane/x_yellow_far (Float64)
       - lane/x_yellow_near(Float64)
+      - camera_topic      (CompressedImage, for debug view)
 
     Publishes:
       - yaw_init_par (Float64): initial yaw reference for alignment (future)
       - yaw_tar_par  (Float64): desired yaw target (future)
       - x_par        (Float64): planned x target in image coordinates
 
-    State machine (skeleton for now):
+    State machine (for now, still simple):
       - IDLE     : waiting for red_sign_big == True
-      - PLANNING : compute a provisional x_par and yaw targets
+      - PLANNING : decide x_par and yaw targets
       - ALIGNING : controller rotates until yaw_init_par ~ yaw_tar_par (future)
       - (later): DRIVING, REPLANNING, etc.
 
-    For now:
-      - When red_sign_big becomes True:
-          * enter PLANNING
-          * set x_par to image center
-          * set yaw_init_par and yaw_tar_par to 0.0 (placeholder)
-          * transition to ALIGNING
-      - While red_sign_big is False:
-          * stay in IDLE and do nothing.
+    Planning logic (current version):
+      - If red_sign_big is FALSE:
+          -> stay in IDLE, no x_par planning.
+      - When red_sign_big becomes TRUE (rising edge):
+          -> enter PLANNING.
+      - In PLANNING:
+          -> if x_red is known: x_par aims at red sign (x_par = x_red)
+             else: x_par approx lane center based on white/yellow lines.
+          -> yaw_init_par, yaw_tar_par are placeholder (0.0) for now.
+          -> publish x_par, yaw_init_par, yaw_tar_par.
+          -> go to ALIGNING.
+      - In ALIGNING:
+          -> keep publishing the same x_par / yaw targets.
+          -> later we'll integrate yaw feedback + driving steps.
+
+    Debug visualization:
+      - If debug_visualization := true and camera_topic is valid:
+          -> show image with:
+              * x_red
+              * x_white_far, x_white_near
+              * x_yellow_far, x_yellow_near
+              * x_par (planned)
+              * lidar objects projected into image using
+                lidar_angle_min/max and mapping_type from YAML.
     """
 
     def __init__(self):
         super().__init__('parcour_node')
 
+        # Debug image state
+        self.bridge: Optional[CvBridge] = None
+        self.debug_image = None
+        self._debug_window = 'parcour_debug'
+
         # === Parameters ===
         self.declare_parameter('config_file', 'parcour.yaml')
         self.declare_parameter('max_rate_hz', 10.0)
+        self.declare_parameter('debug_visualization', False)
+        self.declare_parameter('camera_topic', '/camera/image_raw/compressed')
 
         config_file = self.get_parameter('config_file').get_parameter_value().string_value
         max_rate = self.get_parameter('max_rate_hz').get_parameter_value().double_value
+        self.debug_visualization = self.get_parameter('debug_visualization').get_parameter_value().bool_value
+        self.camera_topic = self.get_parameter('camera_topic').get_parameter_value().string_value
 
         self._min_period = 1.0 / float(max_rate)
         self._last_step_time = self.get_clock().now()
@@ -82,13 +112,27 @@ class ParcourNode(Node):
         self.use_lidar_for_planning = bool(par_cfg.get('use_lidar_for_planning', True))
         self.use_red_for_planning = bool(par_cfg.get('use_red_for_planning', True))
 
+        vis_cfg = par_cfg.get('visualization', {})
+        self.viz_angle_min_deg = float(vis_cfg.get('lidar_angle_min_deg', -90.0))
+        self.viz_angle_max_deg = float(vis_cfg.get('lidar_angle_max_deg', 90.0))
+        self.viz_mapping_type = str(vis_cfg.get('lidar_mapping_type', 'linear')).lower()
+        self.viz_mapping_exp_k = float(vis_cfg.get('lidar_mapping_exp_k', 1.5))
+
+        self.viz_dist_min_m = float(vis_cfg.get('lidar_dist_min_m', 0.2))
+        self.viz_dist_max_m = float(vis_cfg.get('lidar_dist_max_m', 1.0))
+        self.viz_dot_radius_min = int(vis_cfg.get('lidar_dot_radius_min_px', 3))
+        self.viz_dot_radius_max = int(vis_cfg.get('lidar_dot_radius_max_px', 12))
+        self.viz_y_line_offset_px = int(vis_cfg.get('y_line_offset_px', 50))
+
         if self.debug_logging:
             self.get_logger().info(
                 f'Parcour params: image_width={self.image_width_px}, '
                 f'replan_interval={self.replan_interval_s}s, '
                 f'min_clear_distance={self.min_clear_distance_m}m, '
                 f'forward_step={self.forward_step_distance_m}m, '
-                f'yaw_align_tol={self.yaw_align_tolerance_deg}deg'
+                f'yaw_align_tol={self.yaw_align_tolerance_deg}deg, '
+                f'lidar_vis_angle=[{self.viz_angle_min_deg}, {self.viz_angle_max_deg}]deg, '
+                f'lidar_mapping_type={self.viz_mapping_type}'
             )
 
         # === Internal state ===
@@ -121,6 +165,19 @@ class ParcourNode(Node):
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
+
+        # Debug camera subscription
+        if self.debug_visualization:
+            self.bridge = CvBridge()
+            self.sub_debug_cam = self.create_subscription(
+                CompressedImage,
+                self.camera_topic,
+                self.debug_image_callback,
+                sensor_qos
+            )
+            self.get_logger().info(
+                f'Parcour debug visualization enabled, subscribing to camera: {self.camera_topic}'
+            )
 
         # Subscribers
         self.sub_r_lidar = self.create_subscription(
@@ -213,13 +270,27 @@ class ParcourNode(Node):
     def x_yellow_near_callback(self, msg: Float64):
         self.x_yellow_near = msg.data
 
+    def debug_image_callback(self, msg: CompressedImage):
+        """Store latest camera image for debug visualization."""
+        if not msg.data:
+            return
+        if self.bridge is None:
+            return
+        try:
+            self.debug_image = self.bridge.compressed_imgmsg_to_cv2(msg)
+        except Exception as e:
+            self.get_logger().warn(f'Parcour debug: failed to convert compressed image: {e}')
+
     # === Main state machine step ===
 
     def step(self):
-        """Main loop for parcours state machine."""
+        """Main loop for parcours state machine + debug drawing."""
         now = self.get_clock().now()
         elapsed = (now - self._last_step_time).nanoseconds / 1e9
         if elapsed < self._min_period:
+            # Even if we skip state logic, we can still update debug view occasionally
+            if self.debug_visualization and self.debug_image is not None:
+                self._draw_debug_overlay()
             return
         self._last_step_time = now
 
@@ -235,6 +306,8 @@ class ParcourNode(Node):
 
         # If not in parcours mode, stay idle
         if not self.red_sign_big:
+            if self.debug_visualization and self.debug_image is not None:
+                self._draw_debug_overlay()
             return
 
         # State machine
@@ -251,7 +324,9 @@ class ParcourNode(Node):
         elif self.state == 'ALIGNING':
             self._do_aligning(now)
 
-        # (Later we’ll add DRIVING, REPLAN, etc.)
+        # After state logic, draw debug overlay if enabled
+        if self.debug_visualization and self.debug_image is not None:
+            self._draw_debug_overlay()
 
     # === State handlers ===
 
@@ -267,20 +342,33 @@ class ParcourNode(Node):
         if self.debug_logging:
             self.get_logger().info('Parcour: red_sign_big FALSE, stopping parcours, back to IDLE.')
         self.state = 'IDLE'
-        # Optionally reset outputs or leave last ones
+        # Optionally reset outputs (we can leave last values as-is for now)
 
     def _do_planning(self, now):
         """
-        Planning step: for now, simply plan to go straight (x_par = image center),
-        and set a dummy yaw target (0.0). In the future we’ll use:
-          - r_lidar to avoid obstacles
-          - x_red / lane lines to choose path
+        Planning step:
+          - Primary goal: point towards red sign (if visible).
+          - If red sign is not visible: approximate lane center using lane lines.
+          - For now, yaw_init and yaw_tar are placeholders (0.0).
+          - Later we integrate:
+              * lidar_objects to avoid obstacles
+              * lane constraints to avoid crossing white/yellow
+              * step-based forward motion.
         """
-        # Simple initial plan: keep x_par at image center
-        x_par = self.image_center_x
+        # 1) Base target on red sign if available
+        if self.use_red_for_planning and self.x_red is not None:
+            x_par = self.x_red
+        else:
+            # 2) Otherwise approximate lane center (Duckietown-style heuristic)
+            left_x = self.x_white_near  # treat white_near as left
+            right_x = self.x_yellow_near  # treat yellow_near as right
+            x_par = self._compute_lane_center(left_x, right_x)
 
-        # Placeholder for yaw planning:
-        # For example, 0.0 rad or deg relative heading — we’ll define this later
+            # Fallback to image center if no lane info
+            if x_par is None:
+                x_par = self.image_center_x
+
+        # Placeholders for yaw planning (we'll define conventions later)
         yaw_init = 0.0
         yaw_tar = 0.0
 
@@ -324,12 +412,169 @@ class ParcourNode(Node):
         self.pub_yaw_init_par.publish(Float64(data=float(self.current_yaw_init)))
         self.pub_yaw_tar_par.publish(Float64(data=float(self.current_yaw_tar)))
 
-        # In future: check yaw feedback and transition to DRIVING when aligned
+    # === Helpers ===
+
+    def _compute_lane_center(self, left_x: Optional[float], right_x: Optional[float]) -> Optional[float]:
+        """
+        Roughly mimic the Duckietown lane-center heuristic used in control_node:
+          if left_x and right_x valid and left_x > right_x:
+              center = (left_x + right_x)/2 - 30
+          elif right only:
+              center = right_x + 170
+          elif left only:
+              center = left_x - 230
+          else:
+              None
+        """
+        if left_x is not None and right_x is not None and left_x > right_x:
+            return (left_x + right_x) / 2.0 - 30.0
+        elif right_x is not None:
+            return right_x + 170.0
+        elif left_x is not None:
+            return left_x - 230.0
+        else:
+            return None
+
+    def _angle_to_image_x(self, angle_deg: float, image_width: int) -> Optional[int]:
+        """
+        Map lidar angle (deg) into image x pixel using configuration.
+
+        We assume:
+          - angle_deg in [viz_angle_min_deg, viz_angle_max_deg]
+          - 0 deg = center of image
+          - positive angles = LEFT of the robot
+          - image x increases to the RIGHT
+
+        So we:
+          1) normalize angle to [0, 1] between viz_angle_min_deg and viz_angle_max_deg
+          2) optionally warp it (exp mode)
+          3) invert it: positive angle => smaller x (left)
+        """
+        # Outside visualization range -> ignore
+        if angle_deg < self.viz_angle_min_deg or angle_deg > self.viz_angle_max_deg:
+            return None
+
+        span = self.viz_angle_max_deg - self.viz_angle_min_deg
+        if span <= 0.0:
+            return None
+
+        # normalize angle to [0,1]
+        norm = (angle_deg - self.viz_angle_min_deg) / span
+
+        # Optional non-linear mapping
+        if self.viz_mapping_type == 'exp':
+            # map norm from [0,1] to [-1,1]
+            a = 2.0 * norm - 1.0
+            k = self.viz_mapping_exp_k
+            # signed power warp
+            a_warp = math.copysign(abs(a) ** k, a)
+            # back to [0,1]
+            norm = (a_warp + 1.0) / 2.0
+
+        # Clamp
+        norm = max(0.0, min(1.0, norm))
+
+        # Invert orientation: positive angles => left side (small x)
+        norm_inv = 1.0 - norm
+
+        x = int(round(norm_inv * (image_width - 1)))
+        return x
+
+
+    def _distance_to_radius(self, dist_m: float) -> int:
+        """
+        Map distance to a dot radius: closer -> larger, farther -> smaller.
+        Uses viz_dist_min_m, viz_dist_max_m and dot_radius_min/max.
+        """
+        d_min = self.viz_dist_min_m
+        d_max = self.viz_dist_max_m
+        r_min = self.viz_dot_radius_min
+        r_max = self.viz_dot_radius_max
+
+        if dist_m <= 0.0:
+            return r_max
+
+        # Clamp distance
+        d = max(d_min, min(d_max, dist_m))
+        # 0 at d_min, 1 at d_max
+        t = (d - d_min) / (d_max - d_min) if d_max > d_min else 1.0
+        radius = int(round(r_max - t * (r_max - r_min)))
+        return max(r_min, min(r_max, radius))
+
+    def _draw_debug_overlay(self):
+        """Draw x_red, lane points, x_par and lidar objects onto the debug image."""
+        if self.debug_image is None:
+            return
+
+        img = self.debug_image.copy()
+        h, w = img.shape[:2]
+        y_line = h - self.viz_y_line_offset_px
+        if y_line < 0:
+            y_line = int(h * 0.9)
+
+        # Helper to draw a labeled point
+        def draw_point(x_val: Optional[float], label: str, color, dy: int = 0):
+            if x_val is None:
+                return
+            x_int = int(round(x_val))
+            x_int = max(0, min(w - 1, x_int))
+            cv2.circle(img, (x_int, y_line), 5, color, -1)
+            cv2.putText(
+                img, label,
+                (x_int - 20, y_line - 10 + dy),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                color, 1
+            )
+
+        # Draw center of image
+        center_x_int = int(round(self.image_center_x))
+        cv2.circle(img, (center_x_int, y_line), 4, (255, 255, 255), -1)
+        cv2.putText(
+            img, 'center',
+            (center_x_int - 30, y_line - 20),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+            (255, 255, 255), 1
+        )
+
+        # Draw lane-related x positions
+        draw_point(self.x_white_far, 'white_far', (200, 200, 200), dy=-20)
+        draw_point(self.x_white_near, 'white_near', (255, 255, 255), dy=0)
+        draw_point(self.x_yellow_far, 'yellow_far', (0, 200, 200), dy=-20)
+        draw_point(self.x_yellow_near, 'yellow_near', (0, 255, 255), dy=0)
+
+        # Draw x_red (red sign center)
+        draw_point(self.x_red, 'x_red', (0, 0, 255), dy=20)
+
+        # Draw x_par (planned target)
+        if self.current_x_par is not None:
+            draw_point(self.current_x_par, 'x_par', (255, 0, 255), dy=40)
+
+        # Draw lidar objects projected into the image
+        for obj in self.lidar_objects:
+            ang = obj['angle_deg']
+            dist = obj['distance']
+            x_pix = self._angle_to_image_x(ang, w)
+            if x_pix is None:
+                continue
+            radius = self._distance_to_radius(dist)
+            cv2.circle(img, (x_pix, y_line), radius, (0, 255, 0), -1)
+            # Optional: draw distance text above
+            cv2.putText(
+                img, f'{dist:.2f}m',
+                (x_pix - 15, y_line - radius - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                (0, 255, 0), 1
+            )
+
+        cv2.imshow(self._debug_window, img)
+        cv2.waitKey(1)
 
     # === Cleanup ===
 
     def destroy_node(self):
         self.get_logger().info('ParcourNode shutting down.')
+        if self.debug_visualization:
+            cv2.destroyAllWindows()
         super().destroy_node()
 
 

@@ -53,7 +53,7 @@ class ControlNode(Node):
 
 
         # Debug visualization params
-        self.declare_parameter('debug_visualization', False)
+        self.declare_parameter('debug_visualization', True)
         self.declare_parameter('camera_topic', '/camera/image_raw/compressed')
 
 

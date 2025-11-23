@@ -185,7 +185,7 @@ class FinishLineNode(Node):
         )
 
         # Show for debugging
-        cv2.imshow(self._window, binary_clean)
+        #cv2.imshow(self._window, binary_clean)
         #cv2.imshow(self._window, image)
         cv2.waitKey(1)
 

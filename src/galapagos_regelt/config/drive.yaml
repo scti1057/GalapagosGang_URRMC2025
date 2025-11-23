@@ -4,8 +4,8 @@ pid:
   kd: 0.4
 
 speed:
-  v_min: 0.03    # minimum forward speed [m/s]
-  v_max: 0.08    # maximum forward speed [m/s]
+  v_min: 0.03    # minimum forward speed [m/s] 0.03
+  v_max: 0.15    # maximum forward speed [m/s] 0.08
 
 limits:
   omega_max: 1.0 # max absolute angular speed [rad/s]
