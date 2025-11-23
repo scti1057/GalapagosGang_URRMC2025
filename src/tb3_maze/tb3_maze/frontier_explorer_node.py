@@ -36,6 +36,8 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
 from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
+
 
 import tf2_ros
 from tf2_ros import TransformException
@@ -158,7 +160,22 @@ class FrontierExitExplorer(Node):
             f"exit_range_margin={self.exit_range_margin}, exit_min_range={self.exit_min_range}"
         )
 
+        self.frontier_enabled = False
+        self.mission3_done_pub = self.create_publisher(Bool, "mission3/done", 10)
+
+        self.frontier_enable_sub = self.create_subscription(
+            Bool,
+            "mission3/frontier_enable",
+            self.frontier_enable_cb,
+            10,
+)
+
     # ===================== Callbacks =====================
+
+    def frontier_enable_cb(self, msg: Bool):
+        self.frontier_enabled = msg.data
+        self.get_logger().info(f"[FrontierExitExplorer] enabled={self.frontier_enabled} (von mission3_bt)")
+
 
     def map_callback(self, msg: OccupancyGrid):
         self.map = msg
@@ -255,6 +272,9 @@ class FrontierExitExplorer(Node):
             return False
 
     def scan_callback(self, msg: LaserScan):
+        if not self.frontier_enabled:
+            return
+        
         self.last_scan = msg
         if not self.exit_detection_enabled:
             return
@@ -305,6 +325,9 @@ class FrontierExitExplorer(Node):
     # ===================== Haupt-Logik =====================
 
     def timer_callback(self):
+        if not self.frontier_enabled:
+            self.get_logger().info("[DEBUG] Frontier-Explorer noch deaktiviert (mission3/frontier_enable==False).")
+            return
         self.get_logger().info("[DEBUG] Timer-Callback")
 
         if self.map is None:
@@ -363,6 +386,11 @@ class FrontierExitExplorer(Node):
                 self.timer.cancel()
             except Exception as e:
                 self.get_logger().warn(f"[DEBUG] Timer cancel fehlgeschlagen: {e}")
+     
+            done_msg = Bool()
+            done_msg.data = True
+            self.mission3_done_pub.publish(done_msg)
+            self.get_logger().info("[FrontierExitExplorer] mission3/done = True publiziert.")
             return
 
         # Wenn bereits ein Nav2-Goal läuft: warten

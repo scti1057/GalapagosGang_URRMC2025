@@ -28,117 +28,15 @@
     -->
     <Fallback name="SelectMission">
 
-      <!-- Mission 1: Track following (Lane-Follow) -->
-      <Sequence name="DoMission1">
-        <IsMissionActive mission_id="1"/>          <!-- CUSTOM Condition -->
-        <SubTree ID="Mission1_TrackFollowing"/>
-      </Sequence>
-
-      <!-- Mission 2: Obstacle avoiding -->
-      <Sequence name="DoMission2">
-        <IsMissionActive mission_id="2"/>          <!-- CUSTOM Condition -->
-        <SubTree ID="Mission2_ObstacleAvoid"/>
-      </Sequence>
-
       <!-- Mission 3: Closed area (Kasten, Kamera verboten) -->
       <Sequence name="DoMission3">
         <IsMissionActive mission_id="3"/>          <!-- CUSTOM Condition -->
         <SubTree ID="Mission3_ClosedArea"/>
       </Sequence>
 
-      <!-- Mission 4: Storage / Pallet handling -->
-      <Sequence name="DoMission4">
-        <IsMissionActive mission_id="4"/>          <!-- CUSTOM Condition -->
-        <SubTree ID="Mission4_PalletHandling"/>
-      </Sequence>
-
-      <!-- Mission 5: Secret mission (Platzhalter) -->
-      <Sequence name="DoMission5">
-        <IsMissionActive mission_id="5"/>          <!-- CUSTOM Condition -->
-        <SubTree ID="Mission5_SecretMission"/>
-      </Sequence>
-
     </Fallback>
   </BehaviorTree>
-
-
-  <!-- ======================================= -->
-  <!--  Mission 1: Track Following (Lane-Follow) -->
-  <!-- ======================================= -->
-  <BehaviorTree ID="Mission1_TrackFollowing">
-    <!--
-      Grundidee:
-      - Warte, bis Lanes erkannt sind
-      - Solange kein STOP / Finish:
-          - Lokalen Pfad aus Lane generieren
-          - Pfad folgen
-      - Bei STOP / Finish: weich abbremsen und Mission SUCCESS beenden
-    -->
-    <Sequence name="LaneFollowMain">
-
-      <!-- 1) Warten, bis Lane sichtbar -->
-      <RetryUntilSuccessful num_attempts="-1">
-        <IsLaneVisible/>      <!-- CUSTOM Condition: liest z.B. /lane_centerline -->
-      </RetryUntilSuccessful>
-
-      <!-- 2) Hauptschleife Lane-Follow -->
-      <!-- RateController kommt aus Nav2 und ruft das Kind z.B. mit 10 Hz auf -->
-      <RateController hz="10.0">
-        <Fallback name="FollowOrStop">
-
-          <!-- Branch A: STOP / Finish erkannt -->
-          <Sequence name="HandleStopOrFinish">
-            <IsStopOrFinishDetected/>   <!-- CUSTOM Condition: /traffic_signs -->
-            <SlowDownAndStop/>         <!-- CUSTOM Action: Geschwindigkeit runter, STOP -->
-          </Sequence>
-
-          <!-- Branch B: normal weiter der Spur folgen -->
-          <Sequence name="LaneStep">
-            <!-- Pfad aus Lane generieren (lokaler Pfad, z.B. 1.5 m Lookahead) -->
-            <ComputeLanePath lookahead="1.5"/>  <!-- CUSTOM Action: ruft lane_path_server -->
-            <!-- Pfad mit Nav2-Controller folgen -->
-            <FollowPath server_name="FollowPath"
-                        controller_id="LaneController"/>   <!-- Nav2 BT-Action-Node -->
-          </Sequence>
-
-        </Fallback>
-      </RateController>
-
-    </Sequence>
-  </BehaviorTree>
-
-
-  <!-- ===================================== -->
-  <!--  Mission 2: Obstacle Avoiding        -->
-  <!-- ===================================== -->
-  <BehaviorTree ID="Mission2_ObstacleAvoid">
-    <!--
-      Sehr grob:
-      - ggf. Startpose / Startposition sichern
-      - Pfad durch Hindernisfeld planen
-      - Pfad folgen
-      - Vor Barriere anhalten
-      Später können hier spezielle Verhalten rein (z.B. enges Ausweichen).
-    -->
-    <Sequence name="ObstacleAvoidMain">
-
-      <!-- Optional: sicherstellen, dass Odom / Map ok sind -->
-      <InitialPoseReceived/>     <!-- Nav2 Condition, optional -->
-
-      <!-- Pfad bis kurz vor die Barriere planen (global oder lokal) -->
-      <ComputePathToObstacleEnd/>   <!-- CUSTOM Action: könnte ComputePathToPose wrappen -->
-
-      <!-- Pfad folgen unter Nutzung der local costmap -->
-      <FollowPath path="{path}"
-                  controller_id="ObstacleController" />
-
-      <!-- Vor Barriere stehen bleiben -->
-      <StopAtBarrier/>              <!-- CUSTOM Action: stutzt Geschwindigkeit auf 0, check Abstand -->
-
-    </Sequence>
-  </BehaviorTree>
-
-
+  
   <!-- ===================================== -->
   <!--  Mission 3: Closed Area (Kasten)      -->
   <!-- ===================================== -->
@@ -179,47 +77,6 @@
 
       <!-- 3) Draußen angekommen: ggf. vor definierter Linie stoppen -->
       <StopAfterExit/>             <!-- CUSTOM Action: optional -->
-
-    </Sequence>
-  </BehaviorTree>
-
-
-  <!-- ===================================== -->
-  <!--  Mission 4: Storage / Pallet Handling -->
-  <!-- ===================================== -->
-  <BehaviorTree ID="Mission4_PalletHandling">
-    <!--
-      Grobe Schritte nach Regelwerk:
-      1) Lagerbereich / Zone 1 erkennen
-      2) Palette detektieren und anfahren
-      3) Elektromagnet aktivieren (Pickup)
-      4) Transport von Zone 1 zu Zone 2 ohne andere Zonen zu kreuzen
-      5) Palette zentriert in Zone 2 ablegen
-      6) Lagerbereich verlassen
-    -->
-    <Sequence name="PalletHandlingMain">
-
-      <!-- 1) Zone 1 finden -->
-      <DetectZone zone_id="1"/>           <!-- CUSTOM Action: Schild/Markierung erkennen -->
-
-      <!-- 2) Palette lokalisieren und andocken -->
-      <ApproachPallet/>                   <!-- CUSTOM Action: Kamera + Lidar + Controller -->
-
-      <!-- 3) Magnet an -->
-      <ActivateElectromagnet/>           <!-- CUSTOM Action: GPIO / Topic -->
-
-      <!-- 4) Transportpfad von Zone 1 zu Zone 2 planen (Route, Waypoints oder Graph) -->
-      <ComputePalletTransportPath/>      <!-- CUSTOM Action: ComputePathThroughPoses / Router -->
-
-      <!-- 5) Pfad folgen (mit größerem Footprint, damit Palette berücksichtigt wird) -->
-      <FollowPath path="{path}"
-                  controller_id="PalletController" />
-
-      <!-- 6) Palette in Zone 2 zentriert ablegen -->
-      <DropPalletInZone zone_id="2"/>    <!-- CUSTOM Action: Positionieren + Magnet aus -->
-
-      <!-- 7) Lagerbereich verlassen (z.B. zur Ausgangszone fahren) -->
-      <LeaveStorageArea/>                <!-- CUSTOM Action: kleines Nav-Ziel oder Lane-Follow raus -->
 
     </Sequence>
   </BehaviorTree>

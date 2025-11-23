@@ -30,9 +30,51 @@ from std_msgs.msg import Bool
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
+from rclpy.qos import qos_profile_sensor_data
 
 from tf2_ros import Buffer, TransformListener
-from tf_transformations import euler_from_quaternion, quaternion_from_euler
+
+def euler_from_quaternion(quat: Tuple[float, float, float, float]):
+    """
+    Konvertiert Quaternion (x, y, z, w) -> Euler (roll, pitch, yaw).
+    """
+    x, y, z, w = quat
+
+    # Roll (x-Achse)
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(t0, t1)
+
+    # Pitch (y-Achse)
+    t2 = +2.0 * (w * y - z * x)
+    t2 = max(min(t2, 1.0), -1.0)  # clamp
+    pitch = math.asin(t2)
+
+    # Yaw (z-Achse)
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(t3, t4)
+
+    return roll, pitch, yaw
+
+
+def quaternion_from_euler(roll: float, pitch: float, yaw: float):
+    """
+    Konvertiert Euler (roll, pitch, yaw) -> Quaternion (x, y, z, w).
+    """
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+
+    return (x, y, z, w)
 
 
 class DriveInBox(Node):
@@ -47,17 +89,17 @@ class DriveInBox(Node):
         self.declare_parameter('door_search_angle_deg', 60.0)  # +- Winkelbereich
 
         # Grobe Wanddistanz (m) direkt vor dem Roboter
-        self.declare_parameter('wall_distance_estimate', 1.0)
+        self.declare_parameter('wall_distance_estimate', 0.15)
 
         # Wie weit der Zielpunkt hinter die Wand gesetzt wird (m)
-        self.declare_parameter('inside_offset', 0.3)
+        self.declare_parameter('inside_offset', 0.05)
 
         # Faktor: ab welcher Distanz gilt ein Punkt als "Lücke" (offen)
         # r > open_threshold_factor * wall_distance_estimate -> offen
         self.declare_parameter('open_threshold_factor', 0.9)
 
         # Symmetrieprüfung: Winkel links/rechts der Lücke, an denen Wand sein soll
-        self.declare_parameter('door_check_offset_deg', 15.0)
+        self.declare_parameter('door_check_offset_deg', 5.0)
 
         # Faktor für Wanddistanz: r < door_walldist_factor * wall_distance_estimate -> Wand
         self.declare_parameter('door_walldist_factor', 0.7)
@@ -78,7 +120,7 @@ class DriveInBox(Node):
         sign_topic = self.get_parameter('sign_topic').get_parameter_value().string_value
 
         self.scan_sub = self.create_subscription(
-            LaserScan, scan_topic, self.scan_cb, 10
+            LaserScan, scan_topic, self.scan_cb,qos_profile_sensor_data,
         )
 
         # Platzhalter für YOLO-Signal (aktuell Bool)
@@ -105,13 +147,32 @@ class DriveInBox(Node):
 
         self.get_logger().info("SignDoorNavigator gestartet.")
 
+        self.enabled = False
+
+        self.enable_sub = self.create_subscription(
+            Bool,
+            'mission3/drive_in_box_enable',
+            self.enable_cb,
+            10
+)
+
     # -------------------------------------------------------------------------
     # Callbacks
     # -------------------------------------------------------------------------
+
+    def enable_cb(self, msg: Bool):
+        self.enabled = msg.data
+        self.get_logger().info(f"[DriveInBox] enabled={self.enabled} (von mission3_bt)")
+
     def scan_cb(self, msg: LaserScan):
+        if not self.enabled:
+            return
         self.latest_scan = msg
 
     def sign_cb(self, msg: Bool):
+        if not self.enabled:
+            return
+        
         if msg.data and not self.sign_seen:
             self.get_logger().info("Schild erkannt (Topic) -> starte Tür-/Lücken-Suche.")
             self.sign_seen = True
@@ -119,6 +180,8 @@ class DriveInBox(Node):
 
     def _simulate_sign_once(self):
         # Timer feuert einmal, dann nicht mehr
+        if not self.enabled:
+            return
         if not self.sign_seen:
             self.get_logger().info("Simuliere Schild-Erkennung (Hilfsvariable).")
             self.sign_seen = True
@@ -375,7 +438,7 @@ class DriveInBox(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = SignDoorNavigator()
+    node = DriveInBox()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

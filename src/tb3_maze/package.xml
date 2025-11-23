@@ -17,6 +17,8 @@
   <depend>visualization_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>numpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf_transformations</depend>
 
   <!-- For ActionClient + Goal sending -->
   <depend>builtin_interfaces</depend>
