@@ -1,0 +1,19 @@
+reference_line_node:
+  ros__parameters:
+    # Koordinatensystem des Strichs (z.B. base_link oder LiDAR-Link)
+    frame_id: "base_link"
+
+    # Länge des ersten Segments (in m) – 31 cm
+    segment1_length: 0.31
+
+    # Länge des zweiten Segments (in m)
+    segment2_length: 2.0
+
+    # Default-Winkel in Grad, falls noch keine Orientation-Message empfangen wurde
+    default_angle_deg: 0.0
+
+    # Marker-Topic, auf dem die Linie visualisiert wird
+    marker_topic: "reference_line"
+
+    # Orientation-Topic (von der red_sign_detector_node)
+    orient_topic: "/red_sign_orient"

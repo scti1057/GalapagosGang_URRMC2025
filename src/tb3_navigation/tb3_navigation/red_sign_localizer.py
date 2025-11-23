@@ -143,15 +143,15 @@ class RedSignLocalizer(Node):
         self.lidar_subtract = 0.1
 
         self.last_log_info = (f"RedSignLocalizer gestartet.\n"
+                              f"  Sub: orient_topic={self.orient_topic}\n"
+                              f"  Pub: goal_pose_pub={goal_pose_pub}\n"
                               f"  global_frame: {self.global_frame}\n"
                               f"  base_frame:   {self.base_frame}\n"
-                              f"  orient_topic: {self.orient_topic}\n"
-                              f"  goal_pose_pub:   {goal_pose_pub}\n"
                               f"  segment1_length (L1): {self.L1} m\n"
                               f"  max_lines: {self.max_lines}\n"
                               f"  min_pose_trans: {self.min_pose_trans} m\n"
-                              f"  min_pose_rot: {min_pose_rot_deg}°\n"
-                              f"  min_angle_diff: {min_angle_diff_deg}°")
+                              f"  min_pose_rot: {min_pose_rot_deg}°\n")
+                            #   f"  min_angle_diff: {min_angle_diff_deg}°")
         self.get_logger().info(self.last_log_info)
 
     # ----------------- Orientation-Callback -----------------

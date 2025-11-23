@@ -7,11 +7,11 @@ setup(
     version='0.0.0',
     packages=find_packages(exclude=['test']),
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config',
-         ['config/red_sign_detector.yaml']),
+        ('share/' + package_name + '/config', ['config/red_sign_detector_params.yaml']),
+        ('share/' + package_name + '/config', ['config/reference_line_node_params.yaml']),
+        ('share/' + package_name + '/config', ['config/red_sign_localizer_minimalized_params.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -27,12 +27,10 @@ setup(
     entry_points={
         'console_scripts': [
             'nav_goal_gui = tb3_navigation.nav_goal_gui:main',
-            'lane_following_node = tb3_navigation.lane_following_node:main',
-            'lane_pose_test_node = tb3_navigation.lane_pose_test_node:main',
             'red_sign_detector = tb3_navigation.red_sign_detector:main',
+            'reference_line_node = tb3_navigation.reference_line_node:main',
+            'red_sign_localizer = tb3_navigation.red_sign_localizer_minimalized:main',
             'red_sign_nav_client = tb3_navigation.red_sign_nav_client:main',
-            'slam_reference_line_node = tb3_navigation.slam_reference_line_node:main',
-            'red_sign_localizer = tb3_navigation.red_sign_localizer:main',
         ],
     },
 )

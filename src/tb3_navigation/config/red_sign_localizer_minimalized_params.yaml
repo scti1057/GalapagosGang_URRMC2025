@@ -1,0 +1,28 @@
+red_sign_localizer:
+  ros__parameters:
+    # --- Frames and Topics ---
+
+    # Das globale Koordinatensystem (normalerweise 'map' oder 'odom')
+    global_frame: "map"
+
+    # Das Basis-Koordinatensystem des Roboters (z.B. 'base_link')
+    base_frame: "base_link"
+
+    # Topic, auf dem die Orientierung des Schilds empfangen wird (Float32MultiArray)
+    orient_topic: "/red_sign_orient"
+
+    # Topic, auf dem die geschätzte Ziel-Pose (PoseStamped) veröffentlicht wird
+    goal_pose_pub: "/red_sign_goal_pose"
+
+
+    # --- Lokalisierungs-Einstellungen ---
+
+    # Abstand für den Startpunkt der "zweiten Linie" vor dem Roboter in Metern (L1)
+    # Wird benötigt, um den Linienursprung korrekt in den global_frame zu transformieren
+    segment1_length: 0.31
+
+    # Entfernung vom Roboter zum gewünschten Zielpunkt (in Metern)
+    forward_goal_dist: 0.8
+
+    # Maximale Anzahl von Punkten, die für die Median-Filterung der Zielkoordinaten gespeichert werden
+    max_points: 5

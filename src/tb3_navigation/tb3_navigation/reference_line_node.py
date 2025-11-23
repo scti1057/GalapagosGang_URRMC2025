@@ -10,9 +10,9 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import Float32MultiArray
 
 
-class SlamReferenceLineNode(Node):
+class ReferenceLineNode(Node):
     def __init__(self):
-        super().__init__('slam_reference_line_node')
+        super().__init__('reference_line_node')
 
         # --- Parameter ---
         # Koordinatensystem des Strichs (z.B. base_link oder LiDAR-Link)
@@ -28,10 +28,16 @@ class SlamReferenceLineNode(Node):
         self.declare_parameter('default_angle_deg', 0.0)
 
         # Marker-Topic
-        self.declare_parameter('marker_topic', 'slam_reference_line')
+        self.declare_parameter('marker_topic', 'reference_line')
 
         # Orientation-Topic (von der anderen Node)
         self.declare_parameter('orient_topic', '/red_sign_orient')
+
+        self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
+
+        self.L1 = self.get_parameter('segment1_length').get_parameter_value().double_value
+
+        self.L2 = self.get_parameter('segment2_length').get_parameter_value().double_value
 
         marker_topic = self.get_parameter('marker_topic').get_parameter_value().string_value
         orientation_topic = self.get_parameter('orient_topic').get_parameter_value().string_value
@@ -55,9 +61,11 @@ class SlamReferenceLineNode(Node):
         self.timer = self.create_timer(0.1, self.timer_callback)  # 10 Hz
 
         self.get_logger().info(
-            f"SlamReferenceLineNode gestartet.\n"
+            f"ReferenceLineNode gestartet.\n"
             f"  Marker-Topic: {marker_topic}, \n"
-            f"  Orientation-Topic: {orientation_topic}, Default-Winkel: {default_angle_deg}°"
+            f"  Orientation-Topic: {orientation_topic}, \n"
+            f"  Default-Winkel: {default_angle_deg}°, \n"
+            f"  Default-Länge L2: {self.L2}°"
         )
 
         self.last_yaw_rad = None
@@ -78,10 +86,6 @@ class SlamReferenceLineNode(Node):
 
     # --- Timer: Marker zeichnen ---
     def timer_callback(self):
-        frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
-        L1 = self.get_parameter('segment1_length').get_parameter_value().double_value
-        L2 = self.get_parameter('segment2_length').get_parameter_value().double_value
-
         angle_rad = -self.current_yaw_rad  # immer letzter empfangener Wert
 
         # Punkte definieren:
@@ -89,18 +93,18 @@ class SlamReferenceLineNode(Node):
         p0 = (0.0, 0.0, 0.0)
 
         # p1: L1 in +x
-        p1 = (L1, 0.0, 0.0)
+        p1 = (self.L1, 0.0, 0.0)
 
         # p2: von p1 in Richtung angle_rad
-        dx2 = L2 * math.cos(angle_rad)
-        dy2 = L2 * math.sin(angle_rad)
+        dx2 = self.L2 * math.cos(angle_rad)
+        dy2 = self.L2 * math.sin(angle_rad)
         p2 = (p1[0] + dx2, p1[1] + dy2, 0.0)
 
         marker = Marker()
-        marker.header.frame_id = frame_id
+        marker.header.frame_id = self.frame_id
         marker.header.stamp = self.get_clock().now().to_msg()
 
-        marker.ns = "slam_reference_line"
+        marker.ns = "reference_line"
         marker.id = 0
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
@@ -124,13 +128,14 @@ class SlamReferenceLineNode(Node):
             pt.y = y
             pt.z = z
             marker.points.append(pt)
+            print(marker.points)
 
         self.marker_pub.publish(marker)
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = SlamReferenceLineNode()
+    node = ReferenceLineNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
