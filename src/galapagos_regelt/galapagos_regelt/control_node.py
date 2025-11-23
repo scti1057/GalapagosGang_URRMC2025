@@ -14,26 +14,35 @@ from std_msgs.msg import Float64, Bool
 
 class ControlNode(Node):
     """
-    Main brain (v2) with finish-line state machine.
-
-    Subscribes:
-      - lane/x_white_near   (Float64)  -> left_x
-      - lane/x_yellow_near  (Float64)  -> right_x
-      - finish_line         (Bool)
-
-    Publishes:
-      - x_tar (Float64): target x in pixels
+    Main brain with two modes:
 
     Modes:
-      - "lane_following" (hardcoded for now)
+      - "lane_following":
+          * Uses lane/x_white_near, lane/x_yellow_near and finish_line
+          * Publishes x_tar for lane following with finish-line behavior
+      - "parcour":
+          * Bridges parcour_node -> yaw_node & drive_node:
+              - yaw_init_par, yaw_tar_par -> yaw_init, yaw_tar
+              - x_par -> x_tar
 
-    Finish-line sequence:
-      1) When finish_line == True and we're in normal mode:
-           - 1s: publish x_tar = image_center (keep driving straight)
-           - next 3s: publish nothing (robot should stop)
-           - then: publish x_tar = image_center until we see x_yellow_near again
-           - then: 2s publishing x_tar based only on yellow (right lane)
-           - then: back to normal lane-following
+    Subscribes (always):
+      - lane/x_white_near   (Float64)  -> left_x  (for lane_following mode)
+      - lane/x_yellow_near  (Float64)  -> right_x
+      - finish_line         (Bool)
+      - yaw_init_par        (Float64)  -> from parcour_node
+      - yaw_tar_par         (Float64)  -> from parcour_node
+      - x_par               (Float64)  -> from parcour_node
+      - camera_topic        (CompressedImage) for debug
+
+    Publishes:
+      - x_tar      (Float64): target x in pixels -> drive_node
+      - yaw_init   (Float64): -> yaw_node
+      - yaw_tar    (Float64): -> yaw_node
+
+    In parcour mode:
+      - Any new yaw_init_par causes yaw_init to be published
+      - Any new yaw_tar_par causes yaw_tar to be published
+      - Any new x_par causes x_tar to be published
     """
 
     def __init__(self):
@@ -44,18 +53,17 @@ class ControlNode(Node):
         self.debug_image = None
         self._debug_window = 'control_debug'
 
-        self.mode = 'lane_following'
+        # Hardcode mode for now
+        # self.mode = 'lane_following'
+        self.mode = 'parcour'
 
         # === Parameters ===
         self.declare_parameter('max_rate_hz', 20.0)
         self.declare_parameter('image_width_px', 640.0)
 
-
-
         # Debug visualization params
         self.declare_parameter('debug_visualization', True)
         self.declare_parameter('camera_topic', '/camera/image_raw/compressed')
-
 
         max_rate = self.get_parameter('max_rate_hz').get_parameter_value().double_value
         self._min_period = 1.0 / float(max_rate)
@@ -70,19 +78,17 @@ class ControlNode(Node):
         if self.debug_visualization:
             self.bridge = CvBridge()
 
-
-
         # Latest lane inputs
         self.latest_x_white_near = None   # left_x
         self.latest_x_yellow_near = None  # right_x
 
-        # === Finish-line state machine ===
+        # === Finish-line state machine (used only in lane_following mode) ===
         # phases: 'normal', 'center_before_stop', 'stop', 'center_after_stop', 'yellow_only'
         self.finish_phase = 'normal'
 
         self.center_before_stop_duration = 1.0   # seconds (center)
         self.stop_duration = 3.0                 # seconds (no x_tar)
-        self.yellow_only_duration = 2.0         # seconds
+        self.yellow_only_duration = 2.0          # seconds
 
         self.center_before_stop_end = None  # rclpy.time.Time
         self.stop_end = None                # rclpy.time.Time
@@ -109,8 +115,7 @@ class ControlNode(Node):
                 f'Debug visualization enabled, subscribing to camera: {self.camera_topic}'
             )
 
-
-        # === Subscribers ===
+        # === Subscribers for lane-following ===
         self.sub_white_near = self.create_subscription(
             Float64,
             'lane/x_white_near',
@@ -132,17 +137,43 @@ class ControlNode(Node):
             sensor_qos
         )
 
-        # === Publisher ===
+        # === Subscribers for parcour bridging ===
+        self.sub_yaw_init_par = self.create_subscription(
+            Float64,
+            'yaw_init_par',
+            self.yaw_init_par_callback,
+            sensor_qos
+        )
+
+        self.sub_yaw_tar_par = self.create_subscription(
+            Float64,
+            'yaw_tar_par',
+            self.yaw_tar_par_callback,
+            sensor_qos
+        )
+
+        self.sub_x_par = self.create_subscription(
+            Float64,
+            'x_par',
+            self.x_par_callback,
+            sensor_qos
+        )
+
+        # === Publishers ===
+        # To drive_node
         self.pub_x_tar = self.create_publisher(Float64, 'x_tar', 10)
+        # To yaw_node
+        self.pub_yaw_init = self.create_publisher(Float64, 'yaw_init', 10)
+        self.pub_yaw_tar = self.create_publisher(Float64, 'yaw_tar', 10)
 
         # === Control loop ===
         self.control_timer = self.create_timer(0.01, self.control_loop)
 
         self.get_logger().info(
-            f'ControlNode started (mode=lane_following, image_width_px={self.image_width_px}).'
+            f'ControlNode started (mode={self.mode}, image_width_px={self.image_width_px}).'
         )
 
-    # === Callbacks ===
+    # === Callbacks: lane-following inputs ===
 
     def white_near_callback(self, msg: Float64):
         self.latest_x_white_near = msg.data
@@ -182,7 +213,7 @@ class ControlNode(Node):
             f'stop {self.stop_duration}s, center until yellow, then yellow-only '
             f'{self.yellow_only_duration}s.'
         )
-    
+
     def debug_image_callback(self, msg: CompressedImage):
         """Store latest camera image for debug visualization."""
         if not msg.data:
@@ -194,6 +225,31 @@ class ControlNode(Node):
         except Exception as e:
             self.get_logger().warn(f'Failed to convert debug image: {e}')
 
+    # === Callbacks: parcour bridging ===
+
+    def yaw_init_par_callback(self, msg: Float64):
+        """
+        Bridge yaw_init_par -> yaw_init when in parcour mode.
+        """
+        if self.mode != 'parcour':
+            return
+        self.pub_yaw_init.publish(Float64(data=float(msg.data)))
+
+    def yaw_tar_par_callback(self, msg: Float64):
+        """
+        Bridge yaw_tar_par -> yaw_tar when in parcour mode.
+        """
+        if self.mode != 'parcour':
+            return
+        self.pub_yaw_tar.publish(Float64(data=float(msg.data)))
+
+    def x_par_callback(self, msg: Float64):
+        """
+        Bridge x_par -> x_tar when in parcour mode.
+        """
+        if self.mode != 'parcour':
+            return
+        self.pub_x_tar.publish(Float64(data=float(msg.data)))
 
     # === Control loop ===
 
@@ -204,6 +260,7 @@ class ControlNode(Node):
             return
         self._last_control_time = now
 
+        # In parcour mode, we only bridge in the callbacks, no lane logic
         if self.mode != 'lane_following':
             return
 
@@ -308,8 +365,6 @@ class ControlNode(Node):
         if self.debug_visualization:
             cv2.destroyAllWindows()
         super().destroy_node()
-
-
 
 
 def main(args=None):

@@ -288,7 +288,7 @@ class LaneDetectNode(Node):
         cv2.polylines(image, self.polygon_far, isClosed=True, color=(200, 200, 200), thickness=2)
 
         # Show debug window
-        cv2.imshow(self._window, image)
+        #cv2.imshow(self._window, image)
         cv2.waitKey(1)
 
     # === Node lifecycle ===

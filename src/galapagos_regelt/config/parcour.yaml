@@ -1,39 +1,40 @@
 parcour:
-  # General
-  max_rate_hz: 10.0
   image_width_px: 640.0
 
-  # Planning (used later when we implement motion steps)
-  replan_interval_s: 1.0          # time between re-plans
-  min_clear_distance_m: 0.3       # min lidar distance to consider path clear
-  forward_step_distance_m: 0.3    # how far to drive per step
+  # State 1 (ALIGN) and State 3 (ALIGN_90)
+  align_object_angle_deadzone_deg: 5.0      # tolerance in degrees
 
-  # Yaw alignment (used later)
-  yaw_align_tolerance_deg: 3.0    # considered aligned if within this
-  yaw_max_turn_deg: 90.0          # max allowed turn per step (safety)
+  # State 2 (DRIVE)
+  drive_stop_distance_m: 0.22               # stop drive when object is closer than this
 
-  # Behavior flags
+  # Pause between states
+  pause_duration_s: 2.0                     # pause between states in seconds
+
+  # Target angle for state 3
+  align90_target_deg: 90.0                  # can tune if needed
+
+  # Step 4: circle left around the pillar
+  circle_linear_x: 0.08                     # m/s (forward speed while circling)
+  circle_angular_z: 0.6                     # rad/s (positive = CCW)
+  circle_center_tolerance_px: 20.0          # |x_red - center| <= this -> stop circle
+
+  replan_interval_s: 1.0
+  min_clear_distance_m: 0.3
+  forward_step_distance_m: 0.3
+  yaw_align_tolerance_deg: 3.0
+  yaw_max_turn_deg: 90.0
+
   debug_logging: true
-  use_lidar_for_planning: true     # later: use r_lidar for path choice
-  use_red_for_planning: true       # aim towards red sign if visible
+  use_lidar_for_planning: true
+  use_red_for_planning: true
 
   visualization:
-    # Lidar angle window for projecting onto the image (in degrees)
-    # e.g. -90..90 = front 180° sector
-    lidar_angle_min_deg: -54.0
+    lidar_angle_min_deg: -50.0
     lidar_angle_max_deg: 54.0
-
-    # How to map lidar angle to image x:
-    #  "linear": simple linear mapping (recommended to start)
-    #  "exp": non-linear mapping using |normalized_angle|^k
-    lidar_mapping_type: "linear"
+    lidar_mapping_type: linear
     lidar_mapping_exp_k: 1.5
-
-    # Distance range used to scale dot size
-    lidar_dist_min_m: 0.2         # closest distance (max dot size)
-    lidar_dist_max_m: 0.7         # farthest distance (min dot size)
+    lidar_dist_min_m: 0.2
+    lidar_dist_max_m: 1.0
     lidar_dot_radius_min_px: 3
-    lidar_dot_radius_max_px: 30
-
-    # Vertical position of debug dots (distance from bottom of the image)
+    lidar_dot_radius_max_px: 12
     y_line_offset_px: 50

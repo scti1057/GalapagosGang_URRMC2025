@@ -1,0 +1,27 @@
+yaw:
+  # Control loop rate
+  max_rate_hz: 20.0
+
+  # PID gains (error in DEGREES)
+  kp: 0.05
+  ki: 0.0
+  kd: 0.01
+
+  # Maximum angular speed (rad/s)
+  omega_max: 0.7
+
+  # How close (in degrees) is "good enough" to stop turning
+  yaw_tolerance_deg: 2.0
+
+  # If no fresh yaw_init / yaw_tar for this long (sec) -> considered stale
+  yaw_timeout_s: 0.5
+
+  # After we detect stale data, publish STOP for this long (sec),
+  # then be completely quiet until new yaw_init / yaw_tar arrive.
+  stop_publish_duration_s: 1.0
+
+  # Topic to send Twist commands to
+  cmd_topic: "cmd_vel"
+
+  # Debug logging
+  debug_logging: true

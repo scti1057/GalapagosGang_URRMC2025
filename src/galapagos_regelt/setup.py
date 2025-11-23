@@ -32,6 +32,7 @@ setup(
             'lida_detection_node = galapagos_regelt.lida_detection_node:main',
             'red_sign_detect_node = galapagos_regelt.red_sign_detect_node:main',
             'parcour_node = galapagos_regelt.parcour_node:main',
+            'yaw_node = galapagos_regelt.yaw_node:main',
         
         ],
     },

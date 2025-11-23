@@ -5,8 +5,8 @@ lidar:
 
   # Angle window to consider (degrees, in [-180, 180])
   # Example: -90 to +90 degrees = front 180° sector
-  scan_angle_min_deg: -90.0
-  scan_angle_max_deg: 90.0
+  scan_angle_min_deg: -180
+  scan_angle_max_deg: 180
 
   # Clustering: how much two neighboring points may differ (meters)
   distance_jump_threshold_m: 0.05   # 5cm
@@ -16,5 +16,5 @@ lidar:
 
   # Tracking / smoothing
   max_objects: 3              # how many objects we publish at most
-  degree_tolerance_deg: 10.0  # to match detections to existing tracks
-  max_missed_iterations: 5    # how many cycles we keep an object after it disappears
+  degree_tolerance_deg: 15.0  # to match detections to existing tracks
+  max_missed_iterations: 7    # how many cycles we keep an object after it disappears

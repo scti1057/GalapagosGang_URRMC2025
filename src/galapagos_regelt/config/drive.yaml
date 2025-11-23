@@ -5,10 +5,10 @@ pid:
 
 speed:
   v_min: 0.03    # minimum forward speed [m/s] 0.03
-  v_max: 0.15    # maximum forward speed [m/s] 0.08
+  v_max: 0.05    # maximum forward speed [m/s] 0.15
 
 limits:
-  omega_max: 1.0 # max absolute angular speed [rad/s]
+  omega_max: 0.5 # max absolute angular speed [rad/s]
 
 image:
   width: 640.0   # image width in pixels (update if your camera is different)
