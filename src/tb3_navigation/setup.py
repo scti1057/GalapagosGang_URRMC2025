@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name + '/config', ['config/red_sign_detector_params.yaml']),
         ('share/' + package_name + '/config', ['config/reference_line_node_params.yaml']),
         ('share/' + package_name + '/config', ['config/red_sign_localizer_minimalized_params.yaml']),
+        ('share/' + package_name + '/resource', ['resource/gg.jpg']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

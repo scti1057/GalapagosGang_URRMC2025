@@ -2,8 +2,9 @@
 
 import sys
 import math
+import subprocess
 
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 import rclpy
 from rclpy.node import Node
@@ -11,100 +12,176 @@ from rclpy.action import ActionClient
 
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Bool, Int32  # <-- Int32 ergänzt
+from std_msgs.msg import Int32
+
+# Pfad zu deinem Logo (anpassen falls nötig)
+LOGO_PATH = "/home/duckie6/GalapagosGang_URRMC2025/src/tb3_navigation/resource/gg.jpg"
 
 
 class Nav2GoalClient(Node):
     def __init__(self):
         super().__init__('nav2_goal_client')
-        # Action-Client für Nav2
+
+        # --- Nav2 Action Client (nur für Idle / manuelles Ziel) ---
         self._action_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.goal_active = False
         self._goal_handle = None
 
-        # Lane-Following Status
-        self.lane_following_running = False
-        self.lane_pub = self.create_publisher(Bool, 'lane_following_enabled', 10)
-
-        # Mission-Auswahl (für Behavior Tree)
+        # --- Missions ---
+        # current_mission = Vorauswahl (per Button)
+        # active_mission  = Mission, die tatsächlich gestartet wurde (0 = keine)
         self.current_mission = 0
+        self.active_mission = 0
         self.mission_pub = self.create_publisher(Int32, 'mission_id', 10)
 
-        self.gui = None  # Referenz auf GUI, wird später gesetzt
+        # Optional: Prozesse zu gestarteten Launchfiles
+        self._mission_processes = {}
 
+        # Referenz auf GUI (für Status-Updates)
+        self.gui = None
+
+    # ------------------------------------------------------------------
+    # GUI-Referenz
+    # ------------------------------------------------------------------
     def set_gui(self, gui):
         self.gui = gui
 
-    # ----------------- Mission Handling -----------------
-
+    # ------------------------------------------------------------------
+    # Mission Handling
+    # ------------------------------------------------------------------
     def set_mission(self, mission_id: int):
         """
-        Aktive Challenge/Mission setzen.
-        0 = Idle, 1..4 = offizielle Missionen, 5 = Secret (optional).
-        Publish auf 'mission_id', damit BT-Condition IsMissionActive darauf reagieren kann.
+        Nur die Vorauswahl setzen.
+        WICHTIG: Es wird NICHT gepublished – das passiert erst beim Go-Button.
         """
-        # Beim Missionswechsel: sicherstellen, dass nichts mehr läuft
-        if self.goal_active:
-            self.cancel_goal()
-        if self.lane_following_running:
-            self.stop_lane_following()
-
         self.current_mission = mission_id
 
-        msg = Int32()
-        msg.data = mission_id
-        self.mission_pub.publish(msg)
-
         if mission_id == 0:
-            txt = "Mission: Idle (0)"
+            txt = "Mission selection: Idle (0)"
         else:
-            txt = f"Mission {mission_id} selected"
+            txt = f"Mission selection: {mission_id}"
 
         self.get_logger().info(txt)
+
         if self.gui:
             self.gui.set_status(txt)
             self.gui.set_mission_display(mission_id)
 
-    # ----------------- Lane Following -----------------
+    def start_selected_mission(self):
+        """
+        Wird NUR für Missionen >0 genutzt.
+        - ggf. vorher laufende Mission stoppen
+        - zugehörige Nodes starten (per Launchfile o.ä.)
+        - mission_id publishen, damit control_node loslegen kann
+        """
+        if self.current_mission == 0:
+            # Idle wird separat behandelt (direktes Nav2-Goal)
+            self.get_logger().info(
+                "start_selected_mission() aufgerufen, aber current_mission=0 (Idle) -> ignoriere."
+            )
+            return
 
-    def _publish_lane_state(self):
-        msg = Bool()
-        msg.data = self.lane_following_running
-        self.lane_pub.publish(msg)
+        # Falls noch eine andere Mission aktiv ist, stoppen wir sie erst
+        if self.active_mission not in (0, self.current_mission):
+            self.stop_active_mission()
 
-    def start_lane_following(self):
-        """Lane-Following starten (nur, wenn noch nicht läuft)."""
-        if self.lane_following_running:
-            self.get_logger().info("Lane following läuft bereits.")
+        mission_id = self.current_mission
+
+        # 1) Nodes für diese Mission starten
+        self.launch_nodes_for_mission(mission_id)
+
+        # 2) mission_id publishen
+        msg = Int32()
+        msg.data = mission_id
+        self.mission_pub.publish(msg)
+
+        self.active_mission = mission_id
+
+        txt = f"Mission {mission_id} STARTED (mission_id={mission_id})."
+        self.get_logger().info(txt)
+
+        if self.gui:
+            self.gui.set_status(txt)
+            self.gui.set_mission_display(mission_id)
+
+    def stop_active_mission(self):
+        """
+        Aktive Mission (falls != 0) stoppen.
+        - mission_id=0 publishen (Idle)
+        - ggf. gestartete Prozesse beenden (falls konfiguriert)
+        """
+        if self.active_mission == 0:
+            self.get_logger().info("Keine aktive Mission zum Stoppen.")
+            return
+
+        mission_id = self.active_mission
+        self.get_logger().info(f"Stoppe Mission {mission_id} -> mission_id=0 (Idle).")
+
+        # mission_id=0 publishen (Control-Node kann darauf reagieren)
+        msg = Int32()
+        msg.data = 0
+        self.mission_pub.publish(msg)
+        self.active_mission = 0
+
+        # Falls wir Prozesse für Missionen gestartet haben, können wir sie hier beenden
+        proc = self._mission_processes.get(mission_id)
+        if proc is not None:
+            self.get_logger().info(f"Beende Launch-Prozess für Mission {mission_id}.")
+            try:
+                proc.terminate()
+            except Exception as e:
+                self.get_logger().error(f"Fehler beim Beenden von Mission {mission_id}: {e}")
+
+    def launch_nodes_for_mission(self, mission_id: int):
+        """
+        Startet die notwendigen Nodes für eine Mission.
+        HIER trägst du deine eigenen ros2 launch Befehle ein.
+        """
+        # Mapping Mission -> Launch-Command (BEISPIELE, bitte anpassen!)
+        launch_cmd = None
+
+        if mission_id == 1:
+            # TODO: an dein Paket / Launchfile anpassen
+            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission1_lane_follow.launch.py"]
+        elif mission_id == 2:
+            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission2_something.launch.py"]
+        elif mission_id == 3:
+            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission3_something.launch.py"]
+        elif mission_id == 4:
+            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission4_something.launch.py"]
+
+        if launch_cmd is None:
+            self.get_logger().warn(
+                f"Keine Launch-Command für Mission {mission_id} definiert. "
+                f"Bitte in launch_nodes_for_mission() anpassen."
+            )
             if self.gui:
-                self.gui.set_status("Lane following already running.")
+                self.gui.set_status(f"No launch command defined for mission {mission_id}.")
             return
 
-        self.lane_following_running = True
-        self._publish_lane_state()
-        self.get_logger().info("Lane following ENABLED.")
-        if self.gui:
-            self.gui.set_status("Lane following ENABLED.")
+        self.get_logger().info(f"Starte Nodes für Mission {mission_id}: {' '.join(launch_cmd)}")
+        try:
+            proc = subprocess.Popen(launch_cmd)
+            self._mission_processes[mission_id] = proc
+        except Exception as e:
+            self.get_logger().error(
+                f"Fehler beim Starten der Launch-Command für Mission {mission_id}: {e}"
+            )
+            if self.gui:
+                self.gui.set_status(f"Error launching mission {mission_id}: {e}")
 
-    def stop_lane_following(self):
-        """Lane-Following stoppen (falls aktiv)."""
-        if not self.lane_following_running:
-            return
-
-        self.lane_following_running = False
-        self._publish_lane_state()
-        self.get_logger().info("Lane following DISABLED.")
-        if self.gui:
-            self.gui.set_status("Lane following DISABLED.")
-
-    # ----------------- Nav2 Goal Handling -----------------
-
+    # ------------------------------------------------------------------
+    # Nav2 Goal Handling (nur für Idle)
+    # ------------------------------------------------------------------
     def send_goal(self, x: float, y: float, yaw: float):
-        """Goal an Nav2 schicken (x, y in m, yaw in rad im map-Frame)."""
-        if self.lane_following_running:
-            self.get_logger().warn("Lane following aktiv, Goal wird nicht gesendet.")
-            if self.gui:
-                self.gui.set_status("Lane following running, cannot send goal.")
+        """
+        Goal an Nav2 schicken (x, y in m, yaw in rad im map-Frame).
+        Wird NUR genutzt, wenn current_mission == 0 (Idle).
+        """
+        if self.current_mission != 0:
+            self.get_logger().warn(
+                "send_goal() aufgerufen, aber current_mission != 0. Ignoriere Nav2-Goal."
+            )
             return
 
         if self.goal_active:
@@ -216,17 +293,16 @@ class Nav2GoalClient(Node):
 
         self.goal_active = False
         self._goal_handle = None
-        if self.gui and not self.lane_following_running:
-            # Status wird bei Lane-Cancel separat gesetzt
+        if self.gui:
             self.gui.set_status("Nav goal cancelled.")
 
 
 class GoalGui(QtWidgets.QWidget):
     """
     Qt-GUI mit:
-      - GroupBox für x, y, theta (deg)
-      - Lane-Following-Checkbox
-      - Challenge-Buttons (Mission 0..4)
+      - Logo oben
+      - GroupBox für x, y, theta (deg) (nur Idle-Mission relevant)
+      - Missions-Buttons (0..4)
       - Go / Stop
       - Status-Zeile
     """
@@ -234,9 +310,6 @@ class GoalGui(QtWidgets.QWidget):
         super().__init__()
         self.node = node
         self.node.set_gui(self)
-
-        # UI-Zustand
-        self.lane_mode_selected = False   # Checkbox-Zustand
 
         self.init_ui()
 
@@ -246,12 +319,29 @@ class GoalGui(QtWidgets.QWidget):
         self.timer.start(50)  # alle 50ms
 
     def init_ui(self):
-        self.setWindowTitle("TB3 Navigation GUI")
+        self.setWindowTitle("TB3 Navigation & Mission GUI")
 
         main_layout = QtWidgets.QVBoxLayout()
 
-        # --- GroupBox für Zielpose ---
-        pose_group = QtWidgets.QGroupBox("Goal pose (map frame)")
+        # --- Logo oben einblenden ---
+        logo_pixmap = QtGui.QPixmap(LOGO_PATH)
+        if not logo_pixmap.isNull():
+            logo_label = QtWidgets.QLabel()
+            logo_label.setAlignment(QtCore.Qt.AlignCenter)
+            # Breite begrenzen, damit es nicht zu groß wird
+            scaled_logo = logo_pixmap.scaledToWidth(100, QtCore.Qt.SmoothTransformation)
+            logo_label.setPixmap(scaled_logo)
+            main_layout.addWidget(logo_label)
+
+            # Fenster-Icon setzen
+            self.setWindowIcon(QtGui.QIcon(LOGO_PATH))
+        else:
+            # Nur Log-Meldung, keine Exception – GUI soll auch ohne Logo laufen
+            if self.node is not None:
+                self.node.get_logger().warn(f"Logo not found at {LOGO_PATH}")
+
+        # --- GroupBox für Zielpose (nur Idle sinnvoll) ---
+        pose_group = QtWidgets.QGroupBox("Idle goal pose (map frame)")
         pose_layout = QtWidgets.QFormLayout()
 
         self.x_edit = QtWidgets.QLineEdit("0.0")
@@ -265,22 +355,13 @@ class GoalGui(QtWidgets.QWidget):
         pose_group.setLayout(pose_layout)
         main_layout.addWidget(pose_group)
 
-        # Abstand zur Lane-Checkbox
         main_layout.addSpacing(10)
 
-        # --- Lane-Following Checkbox ---
-        self.lane_checkbox = QtWidgets.QCheckBox("Lane following")
-        self.lane_checkbox.stateChanged.connect(self.on_lane_checkbox_changed)
-        main_layout.addWidget(self.lane_checkbox)
-
-        # Abstand zu Buttons
-        main_layout.addSpacing(10)
-
-        # --- Challenge-Buttons ---
-        challenge_group = QtWidgets.QGroupBox("Challenges")
+        # --- Missions-Buttons ---
+        challenge_group = QtWidgets.QGroupBox("Missions")
         chall_layout = QtWidgets.QHBoxLayout()
 
-        self.btn_idle = QtWidgets.QPushButton("Idle (0)")
+        self.btn_idle = QtWidgets.QPushButton("Idle (0) – Nav2")
         self.btn_idle.clicked.connect(lambda: self.on_mission_selected(0))
         chall_layout.addWidget(self.btn_idle)
 
@@ -304,7 +385,7 @@ class GoalGui(QtWidgets.QWidget):
         main_layout.addWidget(challenge_group)
 
         # Aktuelle Mission anzeigen
-        self.mission_label = QtWidgets.QLabel("Current mission: Idle (0)")
+        self.mission_label = QtWidgets.QLabel("Current mission (selected): Idle (0)")
         main_layout.addWidget(self.mission_label)
 
         # Abstand
@@ -333,22 +414,17 @@ class GoalGui(QtWidgets.QWidget):
         # Anfangszustand
         self.update_input_states()
 
-    # ----------------- UI-Callbacks -----------------
-
+    # ------------------------------------------------------------------
+    # UI-Callbacks
+    # ------------------------------------------------------------------
     def on_go_clicked(self):
         """
         Go-Button:
-        - Wenn Lane-Mode NICHT ausgewählt -> Nav2-Goal mit x,y,theta
-        - Wenn Lane-Mode ausgewählt -> Lane-Following starten
+        - Wenn Mission 0 (Idle) ausgewählt -> Nav2-Goal mit x,y,theta
+        - Wenn Mission >0 -> Nodes starten + mission_id publish (über start_selected_mission)
         """
-        if self.lane_mode_selected:
-            # Lane following erst hier starten
-            if not self.node.lane_following_running:
-                self.node.start_lane_following()
-            else:
-                self.set_status("Lane following already running.")
-        else:
-            # Normales Nav2-Goal
+        if self.node.current_mission == 0:
+            # Idle: Nav2-Goal schicken
             try:
                 x = float(self.x_edit.text())
                 y = float(self.y_edit.text())
@@ -358,78 +434,59 @@ class GoalGui(QtWidgets.QWidget):
                 return
 
             theta_rad = math.radians(theta_deg)
-            self.set_status("Sending Nav goal...")
+            self.set_status("Sending Nav goal (Idle)...")
             self.node.send_goal(x, y, theta_rad)
+        else:
+            # Mission starten
+            self.node.start_selected_mission()
 
         self.update_input_states()
 
     def on_stop_clicked(self):
         """
         Stop-Button:
-        - bricht Nav2-Goal ab
-        - stoppt Lane-Following (falls aktiv)
+        - Bei aktiver Mission: mission_id=0 publishen (& ggf. Launch-Prozess killen)
+        - Sonst (Idle/Nav2): Nav2-Goal abbrechen
         """
-        self.node.cancel_goal()
-        self.node.stop_lane_following()
-
-        self.update_input_states()
-
-    def on_lane_checkbox_changed(self, state):
-        """
-        Lane-Mode an/aus:
-        - an: Positions-Eingabe sperren, Go bleibt aktiv (Go startet Lane-Following)
-        - aus: Falls Lane-Following läuft -> stoppen
-        """
-        checked = state == QtCore.Qt.Checked
-        self.lane_mode_selected = checked
-
-        if checked:
-            if self.node.lane_following_running:
-                self.set_status("Lane following already running.")
-            else:
-                self.set_status("Lane mode selected. Press Go to start lane following.")
+        if self.node.active_mission != 0:
+            self.node.stop_active_mission()
         else:
-            # Checkbox aus -> Lane-Following sicher aus
-            if self.node.lane_following_running:
-                self.node.stop_lane_following()
-            self.set_status("Lane mode off.")
+            self.node.cancel_goal()
 
         self.update_input_states()
 
     def on_mission_selected(self, mission_id: int):
         """
-        Wird aufgerufen, wenn einer der Challenge-Buttons gedrückt wird.
-        Setzt die Mission im Node und aktualisiert die Anzeige.
+        Wird aufgerufen, wenn einer der Missions-Buttons gedrückt wird.
+        Setzt NUR die Mission im Node (Vorauswahl), publish passiert erst bei Go.
         """
         self.node.set_mission(mission_id)
-        # update_input_states braucht man hier nicht unbedingt, aber schadet nicht
         self.update_input_states()
 
-    # ----------------- UI-State-Logik -----------------
-
+    # ------------------------------------------------------------------
+    # UI-State-Logik
+    # ------------------------------------------------------------------
     def update_input_states(self):
         """
         Zentraler Ort, der UI-Zustand steuert.
 
         - Eingabe x,y,theta:
             erlaubt nur, wenn
+              * Mission 0 (Idle) ausgewählt
               * kein Nav-Goal aktiv
-              * kein Lane-Following aktiv
-              * Lane-Mode NICHT ausgewählt
         - Go:
-            erlaubt nur, wenn
-              * kein Nav-Goal aktiv
-              * kein Lane-Following aktiv
+            gesperrt, wenn Nav-Goal aktiv (für Idle) – sonst erlaubt
         - Stop:
             erlaubt, wenn
-              * Nav-Goal aktiv ODER Lane-Following aktiv
+              * Nav-Goal aktiv ODER eine Mission aktiv ist
         """
         nav_active = self.node.goal_active
-        lane_running = self.node.lane_following_running
+        active_mission = self.node.active_mission
+        current_mission = self.node.current_mission
 
-        can_edit_pose = (not nav_active) and (not lane_running) and (not self.lane_mode_selected)
-        can_press_go = (not nav_active) and (not lane_running)
-        can_press_stop = nav_active or lane_running
+        can_edit_pose = (current_mission == 0) and (not nav_active)
+        can_press_go = not nav_active  # für Missionen >0 ist nav_active eh False
+        can_press_stop = nav_active or (active_mission != 0)
 
         self.x_edit.setEnabled(can_edit_pose)
         self.y_edit.setEnabled(can_edit_pose)
@@ -438,18 +495,19 @@ class GoalGui(QtWidgets.QWidget):
         self.go_button.setEnabled(can_press_go)
         self.stop_button.setEnabled(can_press_stop)
 
-    # ----------------- Hilfsfunktionen -----------------
-
+    # ------------------------------------------------------------------
+    # Hilfsfunktionen
+    # ------------------------------------------------------------------
     def set_status(self, text: str):
         """Status-Text unten setzen."""
         self.status_label.setText(text)
 
     def set_mission_display(self, mission_id: int):
-        """Anzeige für aktuelle Mission updaten."""
+        """Anzeige für aktuelle Mission (Vorauswahl) updaten."""
         if mission_id == 0:
-            txt = "Current mission: Idle (0)"
+            txt = "Current mission (selected): Idle (0)"
         else:
-            txt = f"Current mission: {mission_id}"
+            txt = f"Current mission (selected): {mission_id}"
         self.mission_label.setText(txt)
 
     def spin_ros_once(self):
