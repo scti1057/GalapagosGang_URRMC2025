@@ -26,31 +26,31 @@ def generate_launch_description():
     )
 
     # ---- Cartographer (SLAM) starten, damit /map & TF map->odom entstehen ----
-    cartographer = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(tb3_cartographer_dir, 'launch', 'cartographer.launch.py')
-        ),
-        launch_arguments={
-            'use_sim_time': 'false',   # echter Roboter, kein /clock
-            'resolution': '0.005',
-        }.items(),
-    )
+    # cartographer = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(tb3_cartographer_dir, 'launch', 'cartographer.launch.py')
+    #     ),
+    #     launch_arguments={
+    #         'use_sim_time': 'false',   # echter Roboter, kein /clock
+    #         'resolution': '0.005',
+    #     }.items(),
+    # )
 
 
-    # ---- Nav2-Stack starten (für REALROBOT, kein use_sim_time) ----
-    nav2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')
-        ),
-        launch_arguments={
-            'params_file': params_file,
-            'use_sim_time': 'false',   # wichtig: echte Zeit, kein /clock
-            'autostart': 'true',
-            'use_composition': 'False',  # einfacher zum Debuggen
-            'use_respawn': 'False',
-            'log_level': 'info',
-        }.items(),
-    )
+    # # ---- Nav2-Stack starten (für REALROBOT, kein use_sim_time) ----
+    # nav2 = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')
+    #     ),
+    #     launch_arguments={
+    #         'params_file': params_file,
+    #         'use_sim_time': 'false',   # wichtig: echte Zeit, kein /clock
+    #         'autostart': 'true',
+    #         'use_composition': 'False',  # einfacher zum Debuggen
+    #         'use_respawn': 'False',
+    #         'log_level': 'info',
+    #     }.items(),
+    # )
 
     # # ---- BT python Node ----
     mission3_bt_node = Node(
@@ -119,8 +119,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_params_file,
-        cartographer,
-        nav2,
+        # cartographer,
+        # nav2,
         mission3_bt_node,
         frontier_explorer_node,
         drive_in_box,
