@@ -108,7 +108,7 @@ class PalletFreeDetector(Node):
         self.pal_free_pub = self.create_publisher(Bool, 'pal_free', 10)
         self.debug_image_pub = self.create_publisher(Image, debug_image_topic, 1)
         self._window = "pallet_free_debug"
-        cv2.namedWindow(self._window, cv2.WINDOW_NORMAL)
+        #cv2.namedWindow(self._window, cv2.WINDOW_NORMAL)
 
         self.bridge = CvBridge()
         self.last_is_free = None

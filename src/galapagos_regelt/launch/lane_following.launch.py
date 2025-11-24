@@ -43,6 +43,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'max_rate_hz': 20.0,
+            'config_file': 'control.yaml',
         }]
     )
 

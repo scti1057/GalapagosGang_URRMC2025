@@ -14,6 +14,9 @@ from std_msgs.msg import Float64
 from geometry_msgs.msg import Twist
 
 from ament_index_python.packages import get_package_share_directory
+from std_msgs.msg import Float64, Bool
+from geometry_msgs.msg import Twist
+
 
 
 class DriveNode(Node):
@@ -41,6 +44,8 @@ class DriveNode(Node):
         self.declare_parameter('max_rate_hz', 20.0)  # control loop max rate
         # Timeout: if no x_tar is received for this long, stop the robot
         self.declare_parameter('x_tar_timeout', 0.3)  # seconds
+        # Whether PalettingNode is directly controlling cmd_vel
+        self.pal_control_active = False
 
 
         config_file = self.get_parameter('config_file').get_parameter_value().string_value
@@ -118,7 +123,25 @@ class DriveNode(Node):
 
         self.get_logger().info('DriveNode started.')
 
+        self.sub_pal_active = self.create_subscription(
+            Bool,
+            'pal_control_active',
+            self.pal_control_active_callback,
+            sensor_qos
+        )
+
     # === Callbacks ===
+
+    def pal_control_active_callback(self, msg: Bool):
+        active = bool(msg.data)
+
+        # On entering override: reset PID integrator to avoid a big kick afterwards
+        if active and not self.pal_control_active:
+            self.integral = 0.0
+            self.last_error = 0.0
+
+        self.pal_control_active = active
+
 
     def x_tar_callback(self, msg: Float64):
         """Update target x position and timestamp."""
@@ -134,6 +157,10 @@ class DriveNode(Node):
         if elapsed_rate < self._min_period:
             return
         self._last_loop_time = now
+
+        # If PalettingNode is directly commanding cmd_vel, stay completely quiet
+        if self.pal_control_active:
+            return
 
         # If we never received x_tar or it's too old, stop the robot
         if self.last_x_tar_time is None:
@@ -152,7 +179,22 @@ class DriveNode(Node):
 
         # Compute normalized steering error
         center_pixel_x = self.latest_x_tar
-        error = (self.image_center - center_pixel_x) / self.image_center  # roughly [-1, 1]
+        if center_pixel_x is None:
+            self.publish_stop()
+            return
+
+        # --- NEW: deadband in pixel space ---
+        pixel_error = self.image_center - center_pixel_x
+
+        # e.g. 3 pixels deadband
+        if abs(pixel_error) < 3.0:
+            pixel_error = 0.0
+            # kill any integral wobble when we're basically centered
+            self.integral = 0.0
+            self.last_error = 0.0
+
+        # normalized error in [-1, 1]
+        error = pixel_error / self.image_center
 
         # Timing for PID
         dt = (now - self.last_time).nanoseconds / 1e9

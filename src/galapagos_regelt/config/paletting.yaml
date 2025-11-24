@@ -1,0 +1,57 @@
+paletting:
+
+  debug_visualization: true
+  camera_topic: /camera/image_raw/compressed
+
+  # Logging
+  debug_logging: true
+
+  # Trigger when |closest LiDAR angle| is at least this:
+  start_angle_threshold_deg: 86.0
+
+  # Consider aligned when the error is within this:
+  angle_tolerance_deg: 3.0
+
+  # Pauses (no yaw commands) between steps
+  pause_between_steps_s: 1.0       # between ALIGN_0 and checks
+  pause_after_90_s: 5.0            # after ALIGN_90 before using LiDAR again
+
+  # Targets for yaw node
+  yaw_target0_deg: 0.0
+  yaw_target90_deg: -90.0
+
+  # Flow gating
+  enabled: true                    # disable state machine if needed
+  require_pal_free_for_start: false  # set true if you want pal_free == True as prerequisite
+
+  # Distances for pallet approach (meters)
+  forward_dist_threshold_m: 0.38   # start magnet when closer than this
+  back_dist_threshold_m: 0.50      # stop backing up when farther than this
+
+  # x_pal target in image pixels (center ~320 for 640px image)
+  x_pal_forward: 320.0
+  x_pal_backward: 320.0
+
+  # How long to wait after turning magnet on (seconds)
+  magnet_wait_s: 1.5
+
+  # image geometry for x_pal
+  image_width_px: 640.0
+
+  # distance thresholds [m] for forward/backup phases
+  drop_forward_dist_threshold_m: 0.38   # use for BOTH first approach and second approach
+  drop_back_dist_threshold_m: 0.50     # use for BOTH back-ups
+
+  # sideways move along white lane after picking up the pallet
+  side_offset_px: 270                 # x_pal = x_white_far ± this
+  side_drive_duration_s: 5.0            # minimum time we drive sideways before checking lidar angle
+
+  # timing for magnet + waits
+  magnet_after_grab_wait_s: 1.5         # wait after turning magnet ON
+  magnet_after_release_wait_s: 1.5      # wait after turning magnet OFF
+
+  # backwards linear speed (negative means reverse)
+  back_linear_speed_mps: -0.04
+
+  forward_linear_speed_mps: 0.04
+

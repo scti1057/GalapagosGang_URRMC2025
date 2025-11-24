@@ -1,0 +1,29 @@
+control:
+  # Optional: override camera image width (px)
+  image_width_px: 640.0
+
+  finish_line:
+    # Keep straight before full stop (s)
+    center_before_stop_s: 1.0
+    # Time to stand completely still at finish line (s)
+    stop_duration_s: 3.0
+    # After we re-see yellow: how long to do yellow-only (s)
+    yellow_only_duration_s: 2.0
+
+  signs:
+    # Bounding-box area threshold (pixels^2) to treat a sign as "close"
+    # area = width * height of the YOLO box
+    area_threshold: 8000.0
+
+    # STOP: how long to stop publishing x_tar (DriveNode will stop via timeout)
+    stop_duration_s: 3.0
+
+    # LEFT / RIGHT: how long to bias to yellow/white only
+    turn_duration_s: 4.0
+
+    # NEW: how long to ignore a sign AFTER its action finished
+    cooldown_after_action_s: 5.0
+
+  paletting:
+    # How long after the last paletting command lane-following stays disabled (s)
+    pal_cmd_timeout_s: 2

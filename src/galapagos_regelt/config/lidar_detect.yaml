@@ -5,8 +5,8 @@ lidar:
 
   # Angle window to consider (degrees, in [-180, 180])
   # Example: -90 to +90 degrees = front 180° sector
-  scan_angle_min_deg: -180
-  scan_angle_max_deg: 180
+  scan_angle_min_deg: -95
+  scan_angle_max_deg: 95
 
   # Clustering: how much two neighboring points may differ (meters)
   distance_jump_threshold_m: 0.05   # 5cm
