@@ -71,7 +71,7 @@ class Nav2GoalClient(Node):
         """
         Wird NUR für Missionen >0 genutzt.
         - ggf. vorher laufende Mission stoppen
-        - zugehörige Nodes starten (per Launchfile o.ä.)
+        - zugehörige Nodes starten (per Launchfile)
         - mission_id publishen, damit control_node loslegen kann
         """
         if self.current_mission == 0:
@@ -88,7 +88,13 @@ class Nav2GoalClient(Node):
         mission_id = self.current_mission
 
         # 1) Nodes für diese Mission starten
-        self.launch_nodes_for_mission(mission_id)
+        launched_ok = self.launch_nodes_for_mission(mission_id)
+        if not launched_ok:
+            txt = f"Mission {mission_id}: Launch nicht konfiguriert oder Fehler beim Start."
+            self.get_logger().warn(txt)
+            if self.gui:
+                self.gui.set_status(txt)
+            return
 
         # 2) mission_id publishen
         msg = Int32()
@@ -108,7 +114,7 @@ class Nav2GoalClient(Node):
         """
         Aktive Mission (falls != 0) stoppen.
         - mission_id=0 publishen (Idle)
-        - ggf. gestartete Prozesse beenden (falls konfiguriert)
+        - ggf. gestartete Prozesse beenden
         """
         if self.active_mission == 0:
             self.get_logger().info("Keine aktive Mission zum Stoppen.")
@@ -123,7 +129,7 @@ class Nav2GoalClient(Node):
         self.mission_pub.publish(msg)
         self.active_mission = 0
 
-        # Falls wir Prozesse für Missionen gestartet haben, können wir sie hier beenden
+        # Falls wir Prozesse für Missionen gestartet haben, hier beenden
         proc = self._mission_processes.get(mission_id)
         if proc is not None:
             self.get_logger().info(f"Beende Launch-Prozess für Mission {mission_id}.")
@@ -132,43 +138,71 @@ class Nav2GoalClient(Node):
             except Exception as e:
                 self.get_logger().error(f"Fehler beim Beenden von Mission {mission_id}: {e}")
 
-    def launch_nodes_for_mission(self, mission_id: int):
+    def launch_nodes_for_mission(self, mission_id: int) -> bool:
         """
         Startet die notwendigen Nodes für eine Mission.
-        HIER trägst du deine eigenen ros2 launch Befehle ein.
+        Rückgabe:
+          True  -> Launch gestartet
+          False -> nichts gestartet (nicht konfiguriert oder Fehler)
         """
-        # Mapping Mission -> Launch-Command (BEISPIELE, bitte anpassen!)
         launch_cmd = None
 
+        # Mission 1: Lane Following – kein Nav2 nötig
         if mission_id == 1:
-            # TODO: an dein Paket / Launchfile anpassen
-            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission1_lane_follow.launch.py"]
+            # vorhandenes Launchfile in galapagos_regelt
+            launch_cmd = [
+                "ros2", "launch",
+                "galapagos_regelt",
+                "lane_following.launch.py",
+            ]
+
+        # Mission 2: Parcours – kein Nav2 nötig
         elif mission_id == 2:
-            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission2_something.launch.py"]
+            launch_cmd = [
+                "ros2", "launch",
+                "galapagos_regelt",
+                "challenge2_parcour.launch.py",
+            ]
+
+        # Mission 3: Tunnel – braucht Nav2, aber noch nicht implementiert
         elif mission_id == 3:
-            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission3_something.launch.py"]
+            launch_cmd = [
+                "ros2", "launch",
+                "tb3_maze",
+                "tb3_nav_bringup.launch.py",
+            ]
+
+        # Mission 4: Palettenfahrt – noch nicht implementiert
         elif mission_id == 4:
-            launch_cmd = ["ros2", "launch", "galapagos_missions", "mission4_something.launch.py"]
+            warn = (
+                "Mission 4 (Palette -> Palette) ist noch nicht konfiguriert. "
+                "Bitte Launchfile ergänzen, sobald das Setup steht."
+            )
+            self.get_logger().warn(warn)
+            if self.gui:
+                self.gui.set_status("Mission 4 launch not configured yet.")
+            return False
 
         if launch_cmd is None:
             self.get_logger().warn(
-                f"Keine Launch-Command für Mission {mission_id} definiert. "
-                f"Bitte in launch_nodes_for_mission() anpassen."
+                f"Keine Launch-Command für Mission {mission_id} definiert."
             )
             if self.gui:
                 self.gui.set_status(f"No launch command defined for mission {mission_id}.")
-            return
+            return False
 
         self.get_logger().info(f"Starte Nodes für Mission {mission_id}: {' '.join(launch_cmd)}")
         try:
             proc = subprocess.Popen(launch_cmd)
             self._mission_processes[mission_id] = proc
+            return True
         except Exception as e:
             self.get_logger().error(
                 f"Fehler beim Starten der Launch-Command für Mission {mission_id}: {e}"
             )
             if self.gui:
                 self.gui.set_status(f"Error launching mission {mission_id}: {e}")
+            return False
 
     # ------------------------------------------------------------------
     # Nav2 Goal Handling (nur für Idle)
@@ -328,15 +362,14 @@ class GoalGui(QtWidgets.QWidget):
         if not logo_pixmap.isNull():
             logo_label = QtWidgets.QLabel()
             logo_label.setAlignment(QtCore.Qt.AlignCenter)
-            # Breite begrenzen, damit es nicht zu groß wird
-            scaled_logo = logo_pixmap.scaledToWidth(100, QtCore.Qt.SmoothTransformation)
+            scaled_logo = logo_pixmap.scaledToWidth(300, QtCore.Qt.SmoothTransformation)
             logo_label.setPixmap(scaled_logo)
             main_layout.addWidget(logo_label)
 
             # Fenster-Icon setzen
             self.setWindowIcon(QtGui.QIcon(LOGO_PATH))
         else:
-            # Nur Log-Meldung, keine Exception – GUI soll auch ohne Logo laufen
+            # Nur Log-Meldung, GUI läuft auch ohne Logo
             if self.node is not None:
                 self.node.get_logger().warn(f"Logo not found at {LOGO_PATH}")
 
