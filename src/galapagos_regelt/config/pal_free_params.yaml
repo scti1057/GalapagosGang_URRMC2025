@@ -1,0 +1,34 @@
+pallet_free_detector:
+  ros__parameters:
+    # Kamera-Topic
+    image_topic: "/camera/image_raw/compressed"
+
+    # Trapez-ROI (Beispielwerte, musst du anpassen)
+    # P0 (oben links)
+    roi_x0: 200
+    roi_y0: 245
+    # P1 (oben rechts)
+    roi_x1: 425
+    roi_y1: 245
+    # P2 (unten rechts)
+    roi_x2: 535
+    roi_y2: 465
+    # P3 (unten links)
+    roi_x3: 100
+    roi_y3: 465
+
+    # HSV-Bereich für Blau (Feintuning im Labor)
+    blue_h_min: 90
+    blue_h_max: 130
+    blue_s_min: 80
+    blue_v_min: 50
+
+    # Anteil Blau im ROI, ab dem die Palette als frei gilt
+    free_threshold: 0.8
+
+    # Wie oft pro Entscheidung auf pal_free publiziert wird
+    burst_size: 10
+
+    # Debug-Bild
+    debug_image: false
+    debug_image_topic: "/pallet_free/debug_image"
