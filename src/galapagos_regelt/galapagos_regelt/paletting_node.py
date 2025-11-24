@@ -472,9 +472,22 @@ class PalettingNode(Node):
             self._pause_next_state = None
             # fall through to new state in same cycle
 
-        # === DONE: nothing to do ===
+        # === DONE: hold robot stopped and ignore DriveNode ===
         if self.state == 'DONE':
+            # Keep DriveNode muted while we explicitly publish zero cmd_vel
+            self.pub_pal_control_active.publish(Bool(data=True))
+
+            twist = Twist()
+            twist.linear.x = 0.0
+            twist.angular.z = 0.0
+            self.pub_cmd_vel.publish(twist)
+
+            if self.debug_logging:
+                self.get_logger().debug(
+                    'Paletting DONE: holding v=0, omega=0 with pal_control_active=True.'
+                )
             return
+
 
         # === IDLE: wait for start condition ===
         if self.state == 'IDLE':
@@ -694,8 +707,18 @@ class PalettingNode(Node):
 
             if self.pal_free:
                 if self.debug_logging:
-                    self.get_logger().info('Paletting: CHECK_PALLET -> pal_free=True, DONE.')
+                    self.get_logger().info(
+                        'Paletting: CHECK_PALLET -> pal_free=True, DONE.'
+                    )
+                # Immediately mute DriveNode and stop; DONE state will keep it that way
+                self.pub_pal_control_active.publish(Bool(data=True))
+                stop_twist = Twist()
+                stop_twist.linear.x = 0.0
+                stop_twist.angular.z = 0.0
+                self.pub_cmd_vel.publish(stop_twist)
+
                 self.state = 'DONE'
+
             else:
                 if self.debug_logging:
                     self.get_logger().info(
@@ -829,7 +852,7 @@ class PalettingNode(Node):
                 if self.lane_side == 'right':
                     x_pal = self.x_white_far + self.side_offset_px
                 else:
-                    x_pal = self.x_white_far - self.side_offset_px 
+                    x_pal = self.x_white_far - self.side_offset_px + 147 #(needs hardcoded fixes)
             else:
                 x_pal = self.image_center_x
 
@@ -946,17 +969,16 @@ class PalettingNode(Node):
                         f'v={self.back_linear_speed_mps:.2f} m/s.'
                     )
             else:
+                # Stop robot and go to DONE, staying in direct-control mode.
                 twist = Twist()
                 twist.linear.x = 0.0
                 twist.angular.z = 0.0
                 self.pub_cmd_vel.publish(twist)
 
-                # Re-enable DriveNode from now on
-                self.pub_pal_control_active.publish(Bool(data=False))
-
+                # DO NOT re-enable DriveNode; DONE will keep pal_control_active=True
                 if self.debug_logging:
                     self.get_logger().info(
-                        'Paletting BACK_FROM_DROP done -> DONE.'
+                        'Paletting BACK_FROM_DROP done -> DONE (holding position).'
                     )
                 self.state = 'DONE'
             return

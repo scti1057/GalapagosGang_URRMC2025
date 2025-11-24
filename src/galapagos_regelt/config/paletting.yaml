@@ -7,7 +7,7 @@ paletting:
   debug_logging: true
 
   # Trigger when |closest LiDAR angle| is at least this:
-  start_angle_threshold_deg: 86.0
+  start_angle_threshold_deg: 84.0
 
   # Consider aligned when the error is within this:
   angle_tolerance_deg: 3.0
