@@ -77,14 +77,14 @@ class YoloSignDetector(Node):
         # ------------------------------------------------------------------
         # Parameter aus YAML (mit sinnvollen Defaults)
         # ------------------------------------------------------------------
-        default_weights = '/home/duckie6/GalapagosGang_URRMC2025/src/galapagos_checked_yolo/galapagos_checked_yolo/weights/20251123_200000.pt'
+        default_weights = '/home/duckiebot1/GalapagosGang_URRMC2025/src/galapagos_checked_yolo/galapagos_checked_yolo/weights/20251123_200000.pt'
 
         image_topic = _cfg('image_topic', '/camera/image_raw/compressed')
         weights_path = _cfg('weights_path', default_weights)
         self.conf_threshold = float(_cfg('conf_threshold', 0.8))
         detections_topic = _cfg('detections_topic', '/yolo/sign_detections')
 
-        self.debug_image = bool(_cfg('debug_image', False))
+        self.debug_image = bool(_cfg('debug_image', True))
         debug_image_topic = _cfg('debug_image_topic', '/yolo/debug_image')
 
         class_names_cfg = _cfg(

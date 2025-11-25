@@ -1,15 +1,15 @@
 white:
   hl: 0
   sl: 0
-  vl: 238
+  vl: 230
   hh: 255
-  sh: 12
+  sh: 10
   vh: 255
 
 yellow:
   hl: 20
-  sl: 79
-  vl: 165
+  sl: 40
+  vl: 153
   hh: 40
   sh: 255
   vh: 255

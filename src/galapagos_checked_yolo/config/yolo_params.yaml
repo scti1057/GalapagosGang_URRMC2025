@@ -2,7 +2,7 @@
 image_topic: "/camera/image_raw/compressed"
 
 # Pfad zu deinen Weights (oder weglassen -> Default aus dem Code)
-# weights_path: "/home/duckie6/GalapagosGang_URRMC2025/src/galapagos_checked_yolo/galapagos_checked_yolo/weights/20251123_200000.pt"
+weights_path: "/home/duckie1/GalapagosGang_URRMC2025/src/galapagos_checked_yolo/galapagos_checked_yolo/weights/20251123_200000.pt"
 
 # Konfidenz-Threshold
 conf_threshold: 0.8
