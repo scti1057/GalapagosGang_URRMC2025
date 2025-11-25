@@ -174,14 +174,11 @@ class Nav2GoalClient(Node):
 
         # Mission 4: Palettenfahrt – noch nicht implementiert
         elif mission_id == 4:
-            warn = (
-                "Mission 4 (Palette -> Palette) ist noch nicht konfiguriert. "
-                "Bitte Launchfile ergänzen, sobald das Setup steht."
-            )
-            self.get_logger().warn(warn)
-            if self.gui:
-                self.gui.set_status("Mission 4 launch not configured yet.")
-            return False
+            launch_cmd = [
+                "ros2", "launch",
+                "galapagos_regelt",
+                "challenge4_parcour.launch.py",
+            ]
 
         if launch_cmd is None:
             self.get_logger().warn(

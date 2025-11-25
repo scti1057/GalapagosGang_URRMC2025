@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import os
+import yaml
+from pathlib import Path
+
 import rclpy
 from rclpy.node import Node
 
@@ -8,58 +12,104 @@ from sensor_msgs.msg import CompressedImage, Image
 from cv_bridge import CvBridge, CvBridgeError
 
 from ultralytics import YOLO
-from pathlib import Path
-
 from vision_msgs.msg import Detection2DArray, Detection2D, BoundingBox2D, ObjectHypothesisWithPose
 
 import cv2
+from ament_index_python.packages import get_package_share_directory
 
 
 class YoloSignDetector(Node):
     """
     YOLOv8-Schild-Detektor:
 
-    - subscribed auf ein *compressed* Kamera-Topic (sensor_msgs/CompressedImage)
+    - subscribed auf *compressed* Kamera-Topic (sensor_msgs/CompressedImage)
     - führt YOLOv8-Inferenz aus
     - wählt pro Klasse nur das 'nächste' Schild (größte Bounding-Box-Fläche)
     - published:
         * Detection2DArray auf detections_topic
         * Debug-Image mit Bounding Boxes + Klassennamen auf debug_image_topic (sensor_msgs/Image)
+
+    Konfiguration:
+      - wird aus einem YAML-File geladen, z.B. share/galapagos_checked_yolo/config/yolo_sign_params.yaml
+      - welches File benutzt wird, wird über den ROS-Parameter 'config_file' bestimmt
     """
 
     def __init__(self):
         super().__init__('yolo_sign_detector')
 
-        # -------- Parameter --------
-        self.declare_parameter('image_topic', '/camera/image_raw/compressed')
-        default_weights = str(
-            Path(__file__).resolve().parent / 'weights' / '20251123_200000.pt'
+        # ------------------------------------------------------------------
+        # Config-Datei laden (ähnlich wie beim Paletten-Detector)
+        # ------------------------------------------------------------------
+        self.declare_parameter('config_file', 'yolo_sign_params.yaml')
+        config_file = (
+            self.get_parameter('config_file')
+            .get_parameter_value()
+            .string_value
         )
-        self.declare_parameter('weights_path', default_weights)
-        self.declare_parameter('conf_threshold', 0.5)
-        self.declare_parameter('detections_topic', '/yolo/sign_detections')
 
-        # Debug-Flags / Topic
-        self.declare_parameter('debug_image', True)
-        self.declare_parameter('debug_image_topic', '/yolo/debug_image')
+        package_share = get_package_share_directory('galapagos_checked_yolo')
+        self._config_path = os.path.join(package_share, 'config', config_file)
+        self.get_logger().info(f'Using config file: {self._config_path}')
 
-        image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
-        weights_path = self.get_parameter('weights_path').get_parameter_value().string_value
-        self.conf_threshold = self.get_parameter('conf_threshold').get_parameter_value().double_value
-        detections_topic = self.get_parameter('detections_topic').get_parameter_value().string_value
+        try:
+            with open(self._config_path, 'r') as f:
+                conf_raw = yaml.safe_load(f) or {}
+        except Exception as e:
+            self.get_logger().error(f'Konnte Config nicht laden: {e}')
+            conf_raw = {}
 
-        self.debug_image = self.get_parameter('debug_image').get_parameter_value().bool_value
-        debug_image_topic = self.get_parameter('debug_image_topic').get_parameter_value().string_value
+        # Node-Namen / ros__parameters ggf. „auspacken“
+        cfg = conf_raw
+        node_name = self.get_name()
+        if isinstance(cfg, dict) and node_name in cfg:
+            cfg = cfg[node_name]
+        if isinstance(cfg, dict) and 'ros__parameters' in cfg:
+            cfg = cfg['ros__parameters']
+        if not isinstance(cfg, dict):
+            cfg = {}
+        self.conf = cfg
 
-        # Klassen-Namen wie im Training
-        # Index 0..5 -> string name
-        self.class_names = ['1', '2', 'left', 'right', 'stop', 'tunnel']
+        def _cfg(key, default=None):
+            return self.conf.get(key, default)
 
-        # -------- YOLO laden --------
+        self._cfg = _cfg
+
+        # ------------------------------------------------------------------
+        # Parameter aus YAML (mit sinnvollen Defaults)
+        # ------------------------------------------------------------------
+        default_weights = '/home/duckie6/GalapagosGang_URRMC2025/src/galapagos_checked_yolo/galapagos_checked_yolo/weights/20251123_200000.pt'
+
+        image_topic = _cfg('image_topic', '/camera/image_raw/compressed')
+        weights_path = _cfg('weights_path', default_weights)
+        self.conf_threshold = float(_cfg('conf_threshold', 0.8))
+        detections_topic = _cfg('detections_topic', '/yolo/sign_detections')
+
+        self.debug_image = bool(_cfg('debug_image', False))
+        debug_image_topic = _cfg('debug_image_topic', '/yolo/debug_image')
+
+        class_names_cfg = _cfg(
+            'class_names',
+            ['1', '2', 'left', 'right', 'stop', 'tunnel']
+        )
+        # robust in Strings/Listen umsetzen
+        if isinstance(class_names_cfg, (list, tuple)):
+            self.class_names = [str(c) for c in class_names_cfg]
+        elif isinstance(class_names_cfg, str):
+            self.class_names = [s.strip() for s in class_names_cfg.split(',') if s.strip()]
+        else:
+            self.class_names = ['1', '2', 'left', 'right', 'stop', 'tunnel']
+
+        # ------------------------------------------------------------------
+        # YOLO laden
+        # ------------------------------------------------------------------
+        self.get_logger().info(f'YOLO-Weights laden: {weights_path}')
         self.model = YOLO(weights_path)
 
-        # -------- Subscriber & Publisher --------
+        # ------------------------------------------------------------------
+        # Subscriber & Publisher
+        # ------------------------------------------------------------------
         self.bridge = CvBridge()
+
         self.image_sub = self.create_subscription(
             CompressedImage,
             image_topic,
@@ -73,7 +123,6 @@ class YoloSignDetector(Node):
             10
         )
 
-        # Debug-Image Publisher (normales sensor_msgs/Image)
         self.debug_image_pub = self.create_publisher(
             Image,
             debug_image_topic,
@@ -82,13 +131,18 @@ class YoloSignDetector(Node):
 
         log_info = (
             f"YoloSignDetector gestartet.\n"
+            f"  Config: {self._config_path}\n"
             f"  Sub: image_topic={image_topic}\n"
             f"  Pub: detections_topic={detections_topic}\n"
             f"  YOLOv8-Weights: {weights_path}\n"
             f"  Confidence-Threshold: {self.conf_threshold:.2f}\n"
-            f"  debug_image: {self.debug_image} -> {debug_image_topic}"
+            f"  debug_image: {self.debug_image} -> {debug_image_topic}\n"
+            f"  class_names: {self.class_names}\n"
+            f"  config: {self.conf}"
         )
         self.get_logger().info(log_info)
+
+    # ------------------------------------------------------------------
 
     def image_callback(self, msg: CompressedImage):
         # CompressedImage -> OpenCV
@@ -157,7 +211,7 @@ class YoloSignDetector(Node):
         debug_img = cv_image.copy()
 
         for cls_id, det in best_by_class.items():
-            # Sicherer Klassenname (String)
+            # Klassenname aus Liste
             if 0 <= cls_id < len(self.class_names):
                 class_name = self.class_names[cls_id]
             else:
@@ -169,7 +223,7 @@ class YoloSignDetector(Node):
 
             # Klasse & Score in hypothesis
             hyp = ObjectHypothesisWithPose()
-            hyp.hypothesis.class_id = class_name   # <--- STRING!
+            hyp.hypothesis.class_id = class_name
             hyp.hypothesis.score = det['conf']
             det_msg.results.append(hyp)
 

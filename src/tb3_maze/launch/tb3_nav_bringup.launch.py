@@ -26,15 +26,15 @@ def generate_launch_description():
     )
 
     # ---- Cartographer (SLAM) starten, damit /map & TF map->odom entstehen ----
-    # cartographer = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource(
-    #         os.path.join(tb3_cartographer_dir, 'launch', 'cartographer.launch.py')
-    #     ),
-    #     launch_arguments={
-    #         'use_sim_time': 'false',   # echter Roboter, kein /clock
-    #         'resolution': '0.005',
-    #     }.items(),
-    # )
+    cartographer = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tb3_cartographer_dir, 'launch', 'cartographer.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': 'false',   # echter Roboter, kein /clock
+            'resolution': '0.005',
+        }.items(),
+    )
 
 
     # ---- Nav2-Stack starten (für REALROBOT, kein use_sim_time) ----

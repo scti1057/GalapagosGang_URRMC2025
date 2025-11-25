@@ -1,3 +1,4 @@
+# Kamera-Topic
 image_topic: "/camera/image_raw/compressed"
 
 # Trapez-ROI (Beispielwerte, musst du anpassen)

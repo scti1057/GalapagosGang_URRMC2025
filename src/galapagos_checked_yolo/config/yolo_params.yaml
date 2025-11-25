@@ -1,0 +1,22 @@
+# Kamera
+image_topic: "/camera/image_raw/compressed"
+
+# Pfad zu deinen Weights (oder weglassen -> Default aus dem Code)
+# weights_path: "/home/duckie6/GalapagosGang_URRMC2025/src/galapagos_checked_yolo/galapagos_checked_yolo/weights/20251123_200000.pt"
+
+# Konfidenz-Threshold
+conf_threshold: 0.8
+
+# Topics
+detections_topic: "/yolo/sign_detections"
+debug_image: True
+debug_image_topic: "/yolo/debug_image"
+
+# Klassenreihenfolge wie im Training (Index 0..N-1)
+class_names:
+  - "1"
+  - "2"
+  - "left"
+  - "right"
+  - "stop"
+  - "tunnel"

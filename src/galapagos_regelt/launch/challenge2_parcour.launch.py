@@ -62,21 +62,6 @@ def generate_launch_description():
         }],
     )
 
-    # --- Control node (bridge + mode logic) ---
-    control_node = Node(
-        package='galapagos_regelt',
-        executable='control_node',
-        name='control_node',
-        output='screen',
-        parameters=[{
-            'image_width_px': 640.0,
-            'max_rate_hz': 20.0,
-            'debug_visualization': False,     # or True if you still want its debug view
-            'camera_topic': camera_topic,
-            # mode is hardcoded in the script; make sure self.mode = "parcour"
-        }],
-    )
-
     # --- Drive node (PID on x_tar -> cmd_vel) ---
     drive_node = Node(
         package='galapagos_regelt',
@@ -106,7 +91,6 @@ def generate_launch_description():
         lidar_detection_node,
         red_sign_detect_node,
         parcour_node,
-        control_node,
         drive_node,
         yaw_node,
     ])

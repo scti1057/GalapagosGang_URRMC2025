@@ -12,9 +12,10 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     # Pfade zu deinem Nav-Package und zu nav2_bringup
-    tb3_nav_dir = get_package_share_directory('tb3_nav')
+    tb3_nav_dir = get_package_share_directory('tb3_maze')
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
     tb3_cartographer_dir = get_package_share_directory('turtlebot3_cartographer')
+    camera_topic = '/camera/image_raw/compressed'
 
     # ---- Launch-Argument: welches Nav2-Parameterfile? ----
     params_file = LaunchConfiguration('params_file')
@@ -52,6 +53,34 @@ def generate_launch_description():
         }.items(),
     )
 
+    # # ---- Yolo Node ----
+    yolo_node = Node(
+        package='galapagos_checked_yolo',              # <-- dein Vision-Package-Name
+        executable='yolo_detector_node', # <-- dein Console-Script / Node
+        name='yolo_detector_node',
+        output='screen',
+        parameters=[{
+            'use_sim_time': False,        # auch hier: echte Zeit
+            'max_rate_hz': 10.0,
+            'config_file': 'yolo_params.yaml',
+        }],
+    )
+
+    # --- Control node (bridge + mode logic) ---
+    control_node = Node(
+        package='galapagos_regelt',
+        executable='control_node',
+        name='control_node',
+        output='screen',
+        parameters=[{
+            'image_width_px': 640.0,
+            'max_rate_hz': 20.0,
+            'debug_visualization': False,     # or True if you still want its debug view
+            'camera_topic': camera_topic,
+            # mode is hardcoded in the script; make sure self.mode = "parcour"
+        }],
+    )
+
     # # ---- GUI Node ----
     GUI_node = Node(
         package='tb3_navigation',              # <-- dein Vision-Package-Name
@@ -83,8 +112,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_params_file,
-        cartographer,
-        nav2,
+        # cartographer,
+        # nav2,
+        yolo_node,
+        # control_node,
         GUI_node,
         #lane_sign_node,
     ])
