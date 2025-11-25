@@ -61,8 +61,8 @@ class ControlNode(Node):
 
         # Hardcode mode for now
         #self.mode = 'lane_following'
-        #self.mode = 'parcour'
-        self.mode = 'paletting'
+        self.mode = 'parcour'
+        #self.mode = 'paletting'
 
         # === Parameters ===
         self.declare_parameter('max_rate_hz', 20.0)

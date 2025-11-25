@@ -5,7 +5,7 @@ pid:
 
 speed:
   v_min: 0.03    # minimum forward speed [m/s] 0.03
-  v_max: 0.08    # maximum forward speed [m/s] 0.15
+  v_max: 0.06    # maximum forward speed [m/s] 0.15 (0.08 for paletting)
 
 limits:
   omega_max: 0.5 # max absolute angular speed [rad/s]

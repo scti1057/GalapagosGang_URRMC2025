@@ -2,21 +2,30 @@ parcour:
   image_width_px: 640.0
 
   # State 1 (ALIGN) and State 3 (ALIGN_90)
-  align_object_angle_deadzone_deg: 5.0      # tolerance in degrees
+  align_object_angle_deadzone_deg: 5.0
 
   # State 2 (DRIVE)
-  drive_stop_distance_m: 0.22               # stop drive when object is closer than this
+  drive_stop_distance_m: 0.22
 
   # Pause between states
-  pause_duration_s: 2.0                     # pause between states in seconds
+  pause_duration_s: 2.0
 
-  # Target angle for state 3
-  align90_target_deg: 90.0                  # can tune if needed
+  # Target angle for state 3 (ALIGN_90)
+  align90_target_deg: 90.0
 
-  # Step 4: circle left around the pillar
-  circle_linear_x: 0.08                     # m/s (forward speed while circling)
-  circle_angular_z: 0.6                     # rad/s (positive = CCW)
-  circle_center_tolerance_px: 20.0          # |x_red - center| <= this -> stop circle
+  # NEW: Step 0 (align to red)
+  align_red_tolerance_px: 20.0
+
+  # NEW: corridor in front of the robot towards the red sign
+  corridor_width_m: 0.25          # total width (robot + margin)
+  corridor_max_distance_m: 1.0    # how far ahead we check
+
+  # Circle behaviour around the pillar
+  circle_linear_x: 0.08           # m/s
+  circle_angular_z: 0.6           # rad/s (CCW for left circle)
+  circle_center_tolerance_px: 20.0
+  circle_min_distance_m: 0.25     # abort circle when object is closer than this
+  circle_line_freshness_s: 0.5    # s: how "fresh" x_white_near / x_yellow_near must be
 
   replan_interval_s: 1.0
   min_clear_distance_m: 0.3
@@ -27,6 +36,9 @@ parcour:
   debug_logging: true
   use_lidar_for_planning: true
   use_red_for_planning: true
+  align_red_tolerance_px: 20.0
+  red_align_max_deg: 90.0      # maps full half-image offset to ±90°
+
 
   visualization:
     lidar_angle_min_deg: -50.0

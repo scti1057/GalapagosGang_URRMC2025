@@ -105,12 +105,29 @@ class ParcourNode(Node):
         # Pause duration (between states)
         self.pause_duration_s = float(par_cfg.get('pause_duration_s', 2.0))
 
-        # Target angle for state 3
+        # Target angle for state 3 (object at +90° on the left)
         self.align90_target_deg = float(par_cfg.get('align90_target_deg', 90.0))
-                # Step 4 circle parameters
+
+        # Step 0: align to red in the image
+        self.align_red_tolerance_px = float(par_cfg.get('align_red_tolerance_px', 20.0))
+    
+        # Max pseudo-angle (deg) we use when mapping x_red offset to yaw_init
+        self.red_align_max_deg = float(par_cfg.get('red_align_max_deg', 90.0))
+
+        # Corridor ahead towards the red sign
+        # corridor_width_m is the **total** width (robot width + margin)
+        self.corridor_width_m = float(par_cfg.get('corridor_width_m', 0.25))
+        self.corridor_max_distance_m = float(par_cfg.get('corridor_max_distance_m', 1.0))
+
+        # Step 4 circle parameters (around the pillar)
         self.circle_linear_x = float(par_cfg.get('circle_linear_x', 0.08))          # m/s
-        self.circle_angular_z = float(par_cfg.get('circle_angular_z', 0.6))         # rad/s (CCW)
+        self.circle_angular_z = float(par_cfg.get('circle_angular_z', 0.6))         # rad/s (CCW / left)
         self.circle_center_tolerance_px = float(par_cfg.get('circle_center_tolerance_px', 20.0))
+
+        # Abort conditions for circle-left / circle-right
+        self.circle_min_distance_m = float(par_cfg.get('circle_min_distance_m', 0.25))  # too close to object
+        self.circle_line_freshness_s = float(par_cfg.get('circle_line_freshness_s', 0.5))  # "fresh" line detection window
+
 
 
         self.debug_logging = bool(par_cfg.get('debug_logging', True))
@@ -151,7 +168,13 @@ class ParcourNode(Node):
         self.x_white_far = None
         self.x_white_near = None
         self.x_yellow_far = None
-        self.x_yellow_near = None
+        self.x_yellow_near = None  # <-- add this
+
+        # Timestamps to know if lane detections are "fresh" during circle states
+        self.x_white_near_stamp = None
+        self.x_yellow_near_stamp = None
+
+
 
         # state machine: 'IDLE', 'ALIGN', 'PAUSE', 'DRIVE', 'ALIGN_90', 'CIRCLE_LEFT', 'DONE'
         self.state = 'IDLE'
@@ -275,12 +298,14 @@ class ParcourNode(Node):
 
     def x_white_near_callback(self, msg: Float64):
         self.x_white_near = msg.data
+        self.x_white_near_stamp = self.get_clock().now()
 
     def x_yellow_far_callback(self, msg: Float64):
         self.x_yellow_far = msg.data
 
     def x_yellow_near_callback(self, msg: Float64):
         self.x_yellow_near = msg.data
+        self.x_yellow_near_stamp = self.get_clock().now()
 
     def debug_image_callback(self, msg: CompressedImage):
         """Store latest camera image for debug visualization."""
@@ -321,11 +346,37 @@ class ParcourNode(Node):
         yaw_tar = None
         x_par = None
 
-        # === DONE state: just sit here, only debug ===
+        # === DONE state: final success or blocked; just show debug ===
         if self.state == 'DONE':
             if self.debug_visualization and self.debug_image is not None:
                 self._draw_debug_overlay()
             return
+
+        # If the red sign is "big", parcours is finished
+        if self.red_sign_big:
+            if self.debug_logging and self.state != 'DONE':
+                self.get_logger().info('Parcour: red_sign_big TRUE -> DONE (stop).')
+
+            # stop any direct cmd_vel we may be sending
+            stop_twist = Twist()
+            stop_twist.linear.x = 0.0
+            stop_twist.angular.z = 0.0
+            self.pub_cmd_vel_circle.publish(stop_twist)
+
+            self.state = 'DONE'
+            if self.debug_visualization and self.debug_image is not None:
+                self._draw_debug_overlay()
+            return
+
+        # Optional: nearest LiDAR object (may be None if we currently have no objects)
+        closest = None
+        angle_deg = None
+        dist_m = None
+        if self.lidar_objects:
+            closest = min(self.lidar_objects, key=lambda o: o['distance'])
+            angle_deg = closest['angle_deg']
+            dist_m = closest['distance']
+
 
         # --- Gating by x_red, red_sign_big and LiDAR availability ---
 
@@ -379,37 +430,27 @@ class ParcourNode(Node):
             self.pause_next_state = None
             # Continue with new state logic in this same cycle
 
-        # === IDLE state ===
+        # === IDLE: Step 0 -> align to red & corridor check ===
         if self.state == 'IDLE':
-            # Decide whether to start ALIGN or DRIVE directly
-            if abs(angle_deg) > self.align_deadzone_deg and dist_m > self.drive_stop_distance_m:
-                self.state = 'ALIGN'
+            # If we don't see the red sign yet, do nothing.
+            if self.x_red is None:
                 if self.debug_logging:
-                    self.get_logger().info(
-                        f'Parcour: IDLE -> ALIGN (angle={angle_deg:.1f} deg).'
-                    )
-            else:
-                # Already roughly in front; if not too close, go straight to DRIVE
-                if abs(angle_deg) <= self.align_deadzone_deg and dist_m > self.drive_stop_distance_m:
-                    self.state = 'DRIVE'
-                    if self.debug_logging:
-                        self.get_logger().info(
-                            f'Parcour: IDLE -> DRIVE (angle={angle_deg:.1f} deg, '
-                            f'dist={dist_m:.2f} m).'
-                        )
-                else:
-                    # In front and close -> stay IDLE
-                    if self.debug_logging:
-                        self.get_logger().info(
-                            f'Parcour: object already aligned/close '
-                            f'(angle={angle_deg:.1f} deg, dist={dist_m:.2f} m), stay IDLE.'
-                        )
+                    self.get_logger().info('Parcour: IDLE but no x_red yet, waiting.')
+                if self.debug_visualization and self.debug_image is not None:
+                    self._draw_debug_overlay()
+                return
 
-        # === ALIGN (state 1, target 0°) ===
-        if self.state == 'ALIGN':
-            if abs(angle_deg) > self.align_deadzone_deg:
-                # Still need to align: publish yaw commands, no x_par
-                yaw_init = angle_deg
+            # Align red sign to image center using yaw_node, but yaw_node expects degrees.
+            # We "fake" an angle based on how far x_red is from the center in pixels.
+            err_px = self.image_center_x - self.x_red
+
+            if abs(err_px) > self.align_red_tolerance_px:
+                # Map pixel error to a pseudo-angle in [-red_align_max_deg, +red_align_max_deg]
+                
+                yaw_init = err_px * 0.3
+
+
+                # yaw_tar is always 0 deg (we want to end at "0")
                 yaw_tar = 0.0
 
                 self.pub_yaw_init_par.publish(Float64(data=float(yaw_init)))
@@ -417,116 +458,320 @@ class ParcourNode(Node):
 
                 if self.debug_logging:
                     self.get_logger().info(
-                        f'Parcour ALIGN: closest angle={angle_deg:.1f} deg, '
-                        f'yaw_init_par={yaw_init:.1f}, yaw_tar_par={yaw_tar:.1f}'
+                        f'Parcour ALIGN_RED: x_red={self.x_red:.1f}, center={self.image_center_x:.1f}, '
+                        f'err_px={err_px:.1f} -> yaw_init={yaw_init:.1f} deg, yaw_tar={yaw_tar:.1f} deg'
                     )
             else:
-                # Alignment complete -> enter PAUSE before DRIVE
-                self._enter_pause('DRIVE', now)
+                # Red roughly centered -> check corridor ahead
+                corridor_clear = True
+                if closest is not None:
+                    corridor_clear = self._is_corridor_clear()
+
+                if corridor_clear:
+                    self.state = 'GO_RED'
+                    if self.debug_logging:
+                        self.get_logger().info(
+                            'Parcour: ALIGN_RED done, corridor clear -> GO_RED.'
+                        )
+                else:
+                    if closest is None:
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                'Parcour: corridor blocked but no closest object? -> back to IDLE.'
+                            )
+                    else:
+                        self.state = 'ALIGN'
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour: ALIGN_RED done but corridor blocked '
+                                f'-> ALIGN on closest object (angle={angle_deg:.1f} deg).'
+                            )
+
+
+        # === GO_RED: drive straight towards the red sign ===
+        if self.state == 'GO_RED':
+            if self.x_red is None:
+                # Lost the red sign -> back to IDLE (re-acquire)
+                if self.debug_logging:
+                    self.get_logger().info('Parcour GO_RED: lost x_red, back to IDLE.')
+                self.state = 'IDLE'
+            else:
+                x_par = float(self.x_red)
+                self.pub_x_par.publish(Float64(data=x_par))
+
+                if self.debug_logging:
+                    self.get_logger().info(
+                        f'Parcour GO_RED: x_par={x_par:.1f}'
+                    )
+
+        # === ALIGN (state 1, target 0° for object) ===
+        if self.state == 'ALIGN':
+            if closest is None:
+                if self.debug_logging:
+                    self.get_logger().info('Parcour ALIGN: no LiDAR objects, back to IDLE.')
+                self.state = 'IDLE'
+            else:
+                if abs(angle_deg) > self.align_deadzone_deg:
+                    # Still need to align: publish yaw commands, no x_par
+                    yaw_init = angle_deg
+                    yaw_tar = 0.0
+
+                    self.pub_yaw_init_par.publish(Float64(data=float(yaw_init)))
+                    self.pub_yaw_tar_par.publish(Float64(data=float(yaw_tar)))
+
+                    if self.debug_logging:
+                        self.get_logger().info(
+                            f'Parcour ALIGN: closest angle={angle_deg:.1f} deg, '
+                            f'yaw_init_par={yaw_init:.1f}, yaw_tar_par={yaw_tar:.1f}'
+                        )
+                else:
+                    # Alignment complete -> enter PAUSE before DRIVE
+                    self._enter_pause('DRIVE', now)
+
 
         # === DRIVE (state 2) ===
         if self.state == 'DRIVE':
-            # If object becomes too close, stop driving and go to PAUSE -> ALIGN_90
-            if dist_m <= self.drive_stop_distance_m:
+            if closest is None:
                 if self.debug_logging:
-                    self.get_logger().info(
-                        f'Parcour DRIVE: object too close (dist={dist_m:.2f} m) '
-                        f'-> PAUSE then ALIGN_90.'
-                    )
-                self._enter_pause('ALIGN_90', now)
+                    self.get_logger().info('Parcour DRIVE: no LiDAR objects, back to IDLE.')
+                self.state = 'IDLE'
             else:
-                # Drive toward the closest object: publish x_par = mapped x-position
-                x_pix = self._angle_to_image_x(angle_deg, int(self.image_width_px))
-                if x_pix is not None:
-                    x_par = float(x_pix)
-                    self.pub_x_par.publish(Float64(data=x_par))
-
+                # If object becomes too close, stop driving and go to PAUSE -> ALIGN_90
+                if dist_m <= self.drive_stop_distance_m:
                     if self.debug_logging:
                         self.get_logger().info(
-                            f'Parcour DRIVE: angle={angle_deg:.1f} deg, dist={dist_m:.2f} m, '
-                            f'x_par={x_par:.1f}'
+                            f'Parcour DRIVE: object too close (dist={dist_m:.2f} m) '
+                            f'-> PAUSE then ALIGN_90.'
                         )
+                    self._enter_pause('ALIGN_90', now)
                 else:
-                    # Angle outside visualization / mapping range -> reset
-                    if self.debug_logging:
-                        self.get_logger().info(
-                            f'Parcour DRIVE: angle={angle_deg:.1f} deg outside mapping range, '
-                            f'-> state=IDLE.'
-                        )
-                    self.state = 'IDLE'
+                    # Drive toward the closest object: publish x_par = mapped x-position
+                    x_pix = self._angle_to_image_x(angle_deg, int(self.image_width_px))
+                    if x_pix is not None:
+                        x_par = float(x_pix)
+                        self.pub_x_par.publish(Float64(data=x_par))
 
-        # === ALIGN_90 (state 3, target 90°) ===
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour DRIVE: angle={angle_deg:.1f} deg, dist={dist_m:.2f} m, '
+                                f'x_par={x_par:.1f}'
+                            )
+                    else:
+                        # Angle outside mapping range -> back to IDLE
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour DRIVE: angle={angle_deg:.1f} deg outside mapping range, '
+                                f'-> state=IDLE.'
+                            )
+                        self.state = 'IDLE'
+
+
+        # === ALIGN_90 (state 3, target +90° on the left) ===
         if self.state == 'ALIGN_90':
-            # Measure error vs. target (e.g. 90°)
-            err_angle = angle_deg - self.align90_target_deg
-            if abs(err_angle) > self.align_deadzone_deg:
-                # Still need to align: publish yaw commands with target=90°
-                yaw_init = angle_deg
-                yaw_tar = self.align90_target_deg
-
-                self.pub_yaw_init_par.publish(Float64(data=float(yaw_init)))
-                self.pub_yaw_tar_par.publish(Float64(data=float(yaw_tar)))
-
+            if closest is None:
                 if self.debug_logging:
-                    self.get_logger().info(
-                        f'Parcour ALIGN_90: angle={angle_deg:.1f} deg '
-                        f'-> target={yaw_tar:.1f} deg'
-                    )
+                    self.get_logger().info('Parcour ALIGN_90: no LiDAR objects, back to IDLE.')
+                self.state = 'IDLE'
             else:
-                # Alignment to 90° complete -> PAUSE then CIRCLE_LEFT
-                if self.debug_logging:
-                    self.get_logger().info(
-                        f'Parcour: ALIGN_90 complete (angle={angle_deg:.1f} deg) -> PAUSE -> CIRCLE_LEFT.'
-                    )
-                self._enter_pause('CIRCLE_LEFT', now)
+                # Measure error vs. target (e.g. 90°)
+                err_angle = angle_deg - self.align90_target_deg
+                if abs(err_angle) > self.align_deadzone_deg:
+                    # Still need to align: publish yaw commands with target=90°
+                    yaw_init = angle_deg
+                    yaw_tar = self.align90_target_deg
 
-        # === CIRCLE_LEFT (state 4) ===
-        if self.state == 'CIRCLE_LEFT':
-            # We want to circle counter-clockwise around the pillar
-            # until the red target (x_red) is roughly in the image center.
+                    self.pub_yaw_init_par.publish(Float64(data=float(yaw_init)))
+                    self.pub_yaw_tar_par.publish(Float64(data=float(yaw_tar)))
 
-            if self.x_red is not None:
-                err_px = self.x_red - self.image_center_x
-
-                # Check if red sign is centered within tolerance
-                if abs(err_px) <= self.circle_center_tolerance_px:
-                    # Target is centered -> stop circle and go to DONE
                     if self.debug_logging:
                         self.get_logger().info(
-                            f'Parcour CIRCLE_LEFT: x_red centered '
-                            f'(err_px={err_px:.1f}) -> DONE.'
+                            f'Parcour ALIGN_90: angle={angle_deg:.1f} deg -> target={yaw_tar:.1f} deg'
                         )
-
-                    # publish a stop twist once
-                    stop_twist = Twist()
-                    stop_twist.linear.x = 0.0
-                    stop_twist.angular.z = 0.0
-                    self.pub_cmd_vel_circle.publish(stop_twist)
-
-                    self.state = 'DONE'
                 else:
-                    # Keep circling counter-clockwise with fixed v, omega
+                    # Alignment to 90° complete -> PAUSE then CIRCLE_LEFT
+                    if self.debug_logging:
+                        self.get_logger().info(
+                            f'Parcour: ALIGN_90 complete (angle={angle_deg:.1f} deg) '
+                            f'-> PAUSE -> CIRCLE_LEFT.'
+                        )
+                    self._enter_pause('CIRCLE_LEFT', now)
+
+
+        # === CIRCLE_LEFT (state 4): circle CCW around object ===
+        if self.state == 'CIRCLE_LEFT':
+            # Abort if object too close or fresh white line detected
+            obstacle_too_close = (
+                dist_m is not None and
+                self.circle_min_distance_m > 0.0 and
+                dist_m <= self.circle_min_distance_m
+            )
+
+            fresh_white = False
+            if self.x_white_near is not None and self.x_white_near_stamp is not None:
+                dt_white = (now - self.x_white_near_stamp).nanoseconds / 1e9
+                if dt_white <= self.circle_line_freshness_s:
+                    fresh_white = True
+
+            if obstacle_too_close or fresh_white:
+                # Abort circle-left and prepare for right side approach
+                if self.debug_logging:
+                    reason = []
+                    if obstacle_too_close:
+                        reason.append(f'dist={dist_m:.2f}m')
+                    if fresh_white:
+                        reason.append('x_white_near')
+                    self.get_logger().info(
+                        'Parcour CIRCLE_LEFT: abort due to ' + ' & '.join(reason)
+                        + ' -> PAUSE then ALIGN_MINUS90.'
+                    )
+
+                stop_twist = Twist()
+                stop_twist.linear.x = 0.0
+                stop_twist.angular.z = 0.0
+                self.pub_cmd_vel_circle.publish(stop_twist)
+
+                self._enter_pause('ALIGN_MINUS90', now)
+            else:
+                # Normal success condition: red sign centered again
+                if self.x_red is not None:
+                    err_px = self.x_red - self.image_center_x
+
+                    if abs(err_px) <= self.circle_center_tolerance_px:
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour CIRCLE_LEFT: x_red centered '
+                                f'(err_px={err_px:.1f}) -> IDLE (restart loop).'
+                            )
+
+                        stop_twist = Twist()
+                        stop_twist.linear.x = 0.0
+                        stop_twist.angular.z = 0.0
+                        self.pub_cmd_vel_circle.publish(stop_twist)
+
+                        # Go back to step 0 (ALIGN_RED + corridor check)
+                        self.state = 'IDLE'
+                    else:
+                        # Keep circling CCW
+                        twist = Twist()
+                        twist.linear.x = self.circle_linear_x
+                        twist.angular.z = self.circle_angular_z   # CCW
+                        self.pub_cmd_vel_circle.publish(twist)
+
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour CIRCLE_LEFT: x_red_err={err_px:.1f} px, '
+                                f'v={twist.linear.x:.3f}, omega={twist.angular.z:.3f}'
+                            )
+                else:
+                    # No red detected -> keep circling, hoping to see it later
                     twist = Twist()
                     twist.linear.x = self.circle_linear_x
-                    twist.angular.z = self.circle_angular_z   # CCW
+                    twist.angular.z = self.circle_angular_z
                     self.pub_cmd_vel_circle.publish(twist)
 
                     if self.debug_logging:
-                        self.get_logger().info(
-                            f'Parcour CIRCLE_LEFT: x_red_err={err_px:.1f} px, '
-                            f'v={twist.linear.x:.3f}, omega={twist.angular.z:.3f}'
-                        )
-            else:
-                # No red detected -> just keep circling blindly
-                twist = Twist()
-                twist.linear.x = self.circle_linear_x
-                twist.angular.z = self.circle_angular_z
-                self.pub_cmd_vel_circle.publish(twist)
+                        self.get_logger().info('Parcour CIRCLE_LEFT: no x_red, keep circling.')
 
+        # === ALIGN_MINUS90: align object to -90° (right) before CIRCLE_RIGHT ===
+        if self.state == 'ALIGN_MINUS90':
+            if closest is None:
                 if self.debug_logging:
+                    self.get_logger().info('Parcour ALIGN_MINUS90: no LiDAR objects, back to IDLE.')
+                self.state = 'IDLE'
+            else:
+                target_deg = -90.0
+                err_angle = angle_deg - target_deg
+                if abs(err_angle) > self.align_deadzone_deg:
+                    yaw_init = angle_deg
+                    yaw_tar = target_deg
+
+                    self.pub_yaw_init_par.publish(Float64(data=float(yaw_init)))
+                    self.pub_yaw_tar_par.publish(Float64(data=float(yaw_tar)))
+
+                    if self.debug_logging:
+                        self.get_logger().info(
+                            f'Parcour ALIGN_MINUS90: angle={angle_deg:.1f} deg -> target={yaw_tar:.1f} deg'
+                        )
+                else:
+                    if self.debug_logging:
+                        self.get_logger().info(
+                            f'Parcour: ALIGN_MINUS90 complete (angle={angle_deg:.1f} deg) '
+                            f'-> PAUSE -> CIRCLE_RIGHT.'
+                        )
+                    self._enter_pause('CIRCLE_RIGHT', now)
+
+        # === CIRCLE_RIGHT: mirror of CIRCLE_LEFT but clockwise ===
+        if self.state == 'CIRCLE_RIGHT':
+            obstacle_too_close = (
+                dist_m is not None and
+                self.circle_min_distance_m > 0.0 and
+                dist_m <= self.circle_min_distance_m
+            )
+
+            fresh_yellow = False
+            if self.x_yellow_near is not None and self.x_yellow_near_stamp is not None:
+                dt_yellow = (now - self.x_yellow_near_stamp).nanoseconds / 1e9
+                if dt_yellow <= self.circle_line_freshness_s:
+                    fresh_yellow = True
+
+            if obstacle_too_close or fresh_yellow:
+                # Both directions problematic -> stop and "wait"
+                if self.debug_logging:
+                    reason = []
+                    if obstacle_too_close:
+                        reason.append(f'dist={dist_m:.2f}m')
+                    if fresh_yellow:
+                        reason.append('x_yellow_near')
                     self.get_logger().info(
-                        'Parcour CIRCLE_LEFT: no x_red, keep circling.'
+                        'Parcour CIRCLE_RIGHT: abort due to ' + ' & '.join(reason)
+                        + ' -> DONE (waiting).'
                     )
+
+                stop_twist = Twist()
+                stop_twist.linear.x = 0.0
+                stop_twist.angular.z = 0.0
+                self.pub_cmd_vel_circle.publish(stop_twist)
+
+                self.state = 'DONE'
+            else:
+                # Success condition: red sign centered again
+                if self.x_red is not None:
+                    err_px = self.x_red - self.image_center_x
+
+                    if abs(err_px) <= self.circle_center_tolerance_px:
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour CIRCLE_RIGHT: x_red centered '
+                                f'(err_px={err_px:.1f}) -> IDLE (restart loop).'
+                            )
+
+                        stop_twist = Twist()
+                        stop_twist.linear.x = 0.0
+                        stop_twist.angular.z = 0.0
+                        self.pub_cmd_vel_circle.publish(stop_twist)
+
+                        self.state = 'IDLE'
+                    else:
+                        # Keep circling clockwise
+                        twist = Twist()
+                        twist.linear.x = self.circle_linear_x
+                        twist.angular.z = -self.circle_angular_z   # CW
+                        self.pub_cmd_vel_circle.publish(twist)
+
+                        if self.debug_logging:
+                            self.get_logger().info(
+                                f'Parcour CIRCLE_RIGHT: x_red_err={err_px:.1f} px, '
+                                f'v={twist.linear.x:.3f}, omega={twist.angular.z:.3f}'
+                            )
+                else:
+                    # No red detected -> keep circling CW
+                    twist = Twist()
+                    twist.linear.x = self.circle_linear_x
+                    twist.angular.z = -self.circle_angular_z
+                    self.pub_cmd_vel_circle.publish(twist)
+
+                    if self.debug_logging:
+                        self.get_logger().info('Parcour CIRCLE_RIGHT: no x_red, keep circling.')
 
 
         # Save for debug overlay
@@ -604,6 +849,36 @@ class ParcourNode(Node):
         t = (d - d_min) / (d_max - d_min) if d_max > d_min else 1.0
         radius = int(round(r_max - t * (r_max - r_min)))
         return max(r_min, min(r_max, radius))
+    
+    def _is_corridor_clear(self) -> bool:
+        """
+        Check if there is any LiDAR object inside a forward corridor towards the red sign.
+
+        Corridor is defined by:
+          - |lateral_offset| <= corridor_width_m / 2
+          - 0 < distance <= corridor_max_distance_m
+        """
+        if not self.lidar_objects:
+            # No objects -> assume clear
+            return True
+
+        half_w = self.corridor_width_m / 2.0
+        d_max = self.corridor_max_distance_m
+
+        for obj in self.lidar_objects:
+            d = obj['distance']
+            ang_deg = obj['angle_deg']
+            if d <= 0.0 or d > d_max:
+                continue
+            theta = math.radians(ang_deg)
+            lateral = d * math.sin(theta)
+
+            if abs(lateral) <= half_w:
+                # Object lies in the corridor
+                return False
+
+        return True
+
 
     def _draw_debug_overlay(self):
         """Draw x_red, lane points, x_par and lidar objects onto the debug image."""
