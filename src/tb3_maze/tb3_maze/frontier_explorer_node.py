@@ -37,6 +37,7 @@ from nav_msgs.msg import OccupancyGrid
 from nav2_msgs.action import NavigateToPose
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
+from rclpy.qos import qos_profile_sensor_data
 
 
 import tf2_ros
@@ -58,12 +59,12 @@ class FrontierExitExplorer(Node):
         self.declare_parameter("pose_topic", "/amcl_pose")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("entrance_radius", 0.25)          # ~ "hohe Kosten" um Start
-        self.declare_parameter("exit_distance", 2.2)             # Abstand von Startpose, wann "draußen"
+        self.declare_parameter("exit_distance", 2.0)             # Abstand von Startpose, wann "draußen"
         self.declare_parameter("min_frontier_size", 1)
         self.declare_parameter("global_frame", "map")
         self.declare_parameter("robot_base_frame", "base_footprint")
-        self.declare_parameter("free_max", 40)                   # <= free_max => free
-        self.declare_parameter("min_motion_for_frontier", 0.02)  # m
+        self.declare_parameter("free_max", 100)                   # <= free_max => free
+        self.declare_parameter("min_motion_for_frontier", 0.0)  # m
         self.declare_parameter("project_offset", 0.2)            # m
         # Kickstart-Konfiguration (ca. 5 cm vorwärts als Nav2-Goal)
         self.declare_parameter("kickstart_distance", 0.1)
@@ -139,7 +140,7 @@ class FrontierExitExplorer(Node):
             PoseWithCovarianceStamped, self.pose_topic, self.pose_callback, 10
         )
         self.scan_sub = self.create_subscription(
-            LaserScan, self.scan_topic, self.scan_callback, 10
+            LaserScan, self.scan_topic, self.scan_callback, qos_profile_sensor_data
         )
 
         # ---------------- Nav2 Action Client ----------------
@@ -326,7 +327,7 @@ class FrontierExitExplorer(Node):
 
     def timer_callback(self):
         if not self.frontier_enabled:
-            self.get_logger().info("[DEBUG] Frontier-Explorer noch deaktiviert (mission3/frontier_enable==False).")
+            #self.get_logger().info("[DEBUG] Frontier-Explorer noch deaktiviert (mission3/frontier_enable==False).")
             return
         self.get_logger().info("[DEBUG] Timer-Callback")
 
@@ -440,6 +441,7 @@ class FrontierExitExplorer(Node):
             f"[DEBUG] Roh-Frontiers (Cluster-Schwerpunkte): {len(frontiers)}"
         )
 
+        self.get_logger().info(f"initial pose: {self.initial_pose}")
         candidates = []
         for p in frontiers:
             if self.is_near_entrance(p):
@@ -460,6 +462,11 @@ class FrontierExitExplorer(Node):
             if not self.is_world_free(p[0], p[1]):
                 self.get_logger().info(
                     f"[DEBUG] Frontier {p} verworfen (liegt nicht in freier Zelle)."
+                )
+                continue
+            if p[0] < self.initial_pose[0] or p[1] < self.initial_pose[1]:
+                self.get_logger().info(
+                    f"[DEBUG] Frontier {p} verworfen (liegt unter x=0 oder y=0)."
                 )
                 continue
             candidates.append(p)
@@ -512,10 +519,29 @@ class FrontierExitExplorer(Node):
 
         frontier_cells = []
 
+        # ### NEU: Initialpose holen (für Quadranten-Filter)
+        init_x = init_y = None
+        if self.initial_pose is not None:
+            init_x, init_y = self.initial_pose
+
         for y in range(height):
             for x in range(width):
-                if data[y, x] != UNKNOWN:
-                    continue
+
+                # ### NEU: Weltkoordinate dieser Zelle
+                if init_x is not None:
+                    wx = origin_x + (x + 0.5) * res
+                    wy = origin_y + (y + 0.5) * res
+
+                    # Nur Punkte im "positiven Quadranten" relativ zur Initialpose:
+                    #   wx >= init_x  UND  wy >= init_y
+                    if wx < init_x or wy < init_y:
+                        # liegt "hinter" oder "links/unten" der Initialpose -> ignorieren
+                        continue
+
+                # nur UNKNOWN-Zellen als potentielle Frontier-Kandidaten
+                # if data[y, x] != UNKNOWN:
+                #     continue
+
                 is_frontier = False
                 for dx, dy in neighbors:
                     nx = x + dx
@@ -529,7 +555,7 @@ class FrontierExitExplorer(Node):
                     frontier_cells.append((x, y))
 
         self.get_logger().info(
-            f"[DEBUG] Frontier-Zellen: {len(frontier_cells)}"
+            f"[DEBUG] Frontier-Zellen (gefiltert im +x/+y-Bereich): {len(frontier_cells)}"
         )
 
         if not frontier_cells:
@@ -574,9 +600,10 @@ class FrontierExitExplorer(Node):
             frontier_points_world.append((wx, wy))
 
         self.get_logger().info(
-            f"{len(frontier_points_world)} Frontier-Ziele (Cluster-Schwerpunkte)."
+            f"{len(frontier_points_world)} Frontier-Ziele (Cluster-Schwerpunkte, +x/+y)."
         )
         return frontier_points_world
+
 
     # ===================== Exit-Goal aus Lidar =====================
 

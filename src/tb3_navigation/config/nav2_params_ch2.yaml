@@ -123,11 +123,31 @@ global_costmap:
       # alternativ footprint statt robot_radius:
       # footprint: "[[0.18, 0.18], [0.18, -0.18], [-0.18, -0.18], [-0.18, 0.18]]"
 
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "lane_left_layer", "lane_right_layer", "obstacle_layer", "inflation_layer"]
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+
+      lane_left_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: "/left_lane_map"     # Topic aus deinem lane_left-Node
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true      # falls die Map öfter aktualisiert wird
+        track_unknown_space: false
+        use_maximum: true               # Kosten mit anderen Layern "maxen"
+        lethal_cost_threshold: 50       # >50 => lethal/Obstacle
+
+      lane_right_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: "/right_lane_map"    # Topic aus deinem lane_right-Node
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true
+        track_unknown_space: false
+        use_maximum: true
+        lethal_cost_threshold: 50
 
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -176,7 +196,7 @@ local_costmap:
       # Zum Debuggen praktisch:
       always_send_full_costmap: true
 
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "lane_left_layer", "lane_right_layer", "inflation_layer"]
 
       # static_layer:
       #   plugin: "nav2_costmap_2d::StaticLayer"
@@ -197,6 +217,26 @@ local_costmap:
           max_obstacle_height: 2.0
           clearing: true
           marking: true
+
+      lane_left_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: "/left_lane_map"
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true
+        track_unknown_space: false
+        use_maximum: true
+        lethal_cost_threshold: 50
+
+      lane_right_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: "/right_lane_map"
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true
+        track_unknown_space: false
+        use_maximum: true
+        lethal_cost_threshold: 50
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"

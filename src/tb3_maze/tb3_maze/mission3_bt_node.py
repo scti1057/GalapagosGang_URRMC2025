@@ -233,9 +233,22 @@ class Mission3BtNode(Node):
             self.get_logger().info(f"[BT] /mission='{msg.data}' -> mission3_active={self.mission3_active}")
 
     def start_exploration_cb(self, msg: Bool):
+        # wird von drive_in_box gesetzt, wenn Ziel im Kasten erreicht
         if msg.data and not self.start_exploration_triggered:
-            self.get_logger().info("[BT] /start_exploration == True empfangen.")
+            self.get_logger().info(
+                "[BT] /start_exploration == True empfangen -> Phase 1 aus, Phase 2 an."
+            )
+
+            # Sofort umschalten:
+            # 1) DriveInBox deaktivieren
+            self.enable_drive_in_box(False)
+
+            # 2) Frontier-Explorer aktivieren
+            self.enable_frontier(True)
+
+        # Flag setzen, damit der BT-Node DriveInBoxPhase als "fertig" erkennt
         self.start_exploration_triggered = msg.data
+
 
     def challenge3_done_cb(self, msg: Bool):
         if msg.data and not self.challenge3_done:

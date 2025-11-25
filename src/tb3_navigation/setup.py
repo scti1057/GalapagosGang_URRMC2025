@@ -1,5 +1,8 @@
 from setuptools import find_packages, setup
 
+import os
+from glob import glob
+
 package_name = 'tb3_navigation'
 
 setup(
@@ -9,10 +12,12 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/config', ['config/red_sign_detector_params.yaml']),
-        ('share/' + package_name + '/config', ['config/reference_line_node_params.yaml']),
-        ('share/' + package_name + '/config', ['config/red_sign_localizer_minimalized_params.yaml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*')),
+        (os.path.join('share', package_name, 'config'),
+            glob(os.path.join('tb3_navigation', 'config', '*.yaml'))),
         ('share/' + package_name + '/resource', ['resource/gg.jpg']),
+        (os.path.join('share', package_name, 'config'),
+            ['config/nav2_params_ch2.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

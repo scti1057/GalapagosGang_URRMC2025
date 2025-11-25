@@ -6,7 +6,7 @@ SignDoorNavigator für Turtlebot3 + Nav2 + Lidar.
 
 Szenario:
 - Bot steht VOR einem Kasten mit Öffnung (Eingang).
-- Ein YOLO-Modell (später) erkennt ein Schild "Einfahrt".
+- Ein YOLO-Modell (später) erkennt ein Schild "Einfahrt" und triggert ein Bool-Topic.
 - Dann:
   1) Mit dem Lidar vor dem Bot die Wand scannen.
   2) Größte Lücke finden, die wie ein "Türrahmen" aussieht
@@ -14,8 +14,6 @@ Szenario:
   3) Kurz HINTER dieser Öffnung ein Nav2-Ziel setzen (im map-Frame).
   4) Wenn das Ziel erreicht ist, /start_exploration = True publizieren,
      sodass deine bestehende Frontier-/Box-Node übernimmt.
-
-Aktuell: Schild-Erkennung kann simuliert oder per Bool-Topic zugespielt werden.
 """
 
 import math
@@ -31,8 +29,11 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
 from rclpy.qos import qos_profile_sensor_data
+from vision_msgs.msg import Detection2DArray
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from tf2_ros import Buffer, TransformListener
+
 
 def euler_from_quaternion(quat: Tuple[float, float, float, float]):
     """
@@ -85,14 +86,14 @@ class DriveInBox(Node):
         # Debug: Schild-Erkennung simulieren (0.0 = aus)
         self.declare_parameter('simulate_sign_after_sec', 0.0)
 
-        # Bereich vor dem Roboter, in dem nach Lücken gesucht wird
-        self.declare_parameter('door_search_angle_deg', 60.0)  # +- Winkelbereich
+        # Bereich vor dem Roboter, in dem nach Lücken gesucht wird (± Winkelbereich)
+        self.declare_parameter('door_search_angle_deg', 60.0)
 
-        # Grobe Wanddistanz (m) direkt vor dem Roboter
-        self.declare_parameter('wall_distance_estimate', 0.15)
+        # Grobe Wanddistanz (m) direkt vor dem Roboter (für Lücken-Threshold & Ziel-Offset)
+        self.declare_parameter('wall_distance_estimate', 0.30)
 
         # Wie weit der Zielpunkt hinter die Wand gesetzt wird (m)
-        self.declare_parameter('inside_offset', 0.05)
+        self.declare_parameter('inside_offset', 0.1)
 
         # Faktor: ab welcher Distanz gilt ein Punkt als "Lücke" (offen)
         # r > open_threshold_factor * wall_distance_estimate -> offen
@@ -101,11 +102,18 @@ class DriveInBox(Node):
         # Symmetrieprüfung: Winkel links/rechts der Lücke, an denen Wand sein soll
         self.declare_parameter('door_check_offset_deg', 5.0)
 
-        # Faktor für Wanddistanz: r < door_walldist_factor * wall_distance_estimate -> Wand
-        self.declare_parameter('door_walldist_factor', 0.7)
+        # Fensterbreite um den Prüfstrahl (Bogenlänge auf Wanddistanz), z.B. ±10 cm
+        self.declare_parameter('door_wall_window_m', 0.10)
+
+        # Wände sollen z.B. zwischen 0.15 m und 0.40 m liegen
+        self.declare_parameter('min_wall_dist_m', 0.15)
+        self.declare_parameter('max_wall_dist_m', 0.60)
+
+        self.declare_parameter('goal_angle_scale', 0.0)
 
         # Topics
-        self.declare_parameter('sign_topic', 'sign_detected')                 # Bool (später YOLO-Trigger)
+        # Bool-Topic: wird auf True gesetzt, wenn das Einfahrt-Schild erkannt wurde
+        self.declare_parameter('sign_topic', 'sign_detected')
         self.declare_parameter('scan_topic', 'scan')
         self.declare_parameter('exploration_trigger_topic', 'start_exploration')
 
@@ -114,18 +122,56 @@ class DriveInBox(Node):
         self.goal_sent = False
         self.exploration_started = False
         self.latest_scan: Optional[LaserScan] = None
+        self.enabled = False
+        self.tunnel_counter = 0
+
+        # Sign-based overrides (only used in lane_following mode)
+        #   'none'       -> normal lane following
+        #   'stop'       -> do not publish x_tar (DriveNode stops via timeout)
+        #   'turn_left'  -> follow x_yellow_near only for a while
+        #   'turn_right' -> follow x_white_near only for a while
+        self.sign_state = 'none'
+        self.declare_parameter('sign_area_threshold', 8000.0)
+        self.sign_area_threshold = self.get_parameter('sign_area_threshold').get_parameter_value().double_value
 
         # === Subscriptions ===
         scan_topic = self.get_parameter('scan_topic').get_parameter_value().string_value
         sign_topic = self.get_parameter('sign_topic').get_parameter_value().string_value
 
         self.scan_sub = self.create_subscription(
-            LaserScan, scan_topic, self.scan_cb,qos_profile_sensor_data,
+            LaserScan,
+            scan_topic,
+            self.scan_cb,
+            qos_profile_sensor_data,
         )
 
-        # Platzhalter für YOLO-Signal (aktuell Bool)
-        self.sign_sub = self.create_subscription(
-            Bool, sign_topic, self.sign_cb, 10
+        # self.sign_sub = self.create_subscription(
+        #     Bool,
+        #     sign_topic,
+        #     self.sign_cb,
+        #     10
+        # )
+
+        self.enable_sub = self.create_subscription(
+            Bool,
+            'mission3/drive_in_box_enable',
+            self.enable_cb,
+            10
+        )
+
+        # QoS: sensor-style, keep last
+        sensor_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+
+        # === Subscriber for YOLO traffic sign detections ===
+        self.sub_signs = self.create_subscription(
+            Detection2DArray,
+            '/yolo/sign_detections',
+            self.sign_detections_callback,
+            sensor_qos
         )
 
         # === Publisher, um deine Frontier-/Explorer-Node zu aktivieren ===
@@ -139,22 +185,13 @@ class DriveInBox(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # === Optional: Schild-Erkennung simulieren ===
-        simulate_after = self.get_parameter('simulate_sign_after_sec').get_parameter_value().double_value
-        if simulate_after > 0.0:
-            self.get_logger().info(f"Simulation: Schild wird nach {simulate_after:.1f}s als erkannt gesetzt.")
-            self.create_timer(simulate_after, self._simulate_sign_once)
+        # # === Optional: Schild-Erkennung simulieren ===
+        # simulate_after = self.get_parameter('simulate_sign_after_sec').get_parameter_value().double_value
+        # if simulate_after > 0.0:
+        #     self.get_logger().info(f"Simulation: Schild wird nach {simulate_after:.1f}s als erkannt gesetzt.")
+        #     self.create_timer(simulate_after, self._simulate_sign_once)
 
-        self.get_logger().info("SignDoorNavigator gestartet.")
-
-        self.enabled = False
-
-        self.enable_sub = self.create_subscription(
-            Bool,
-            'mission3/drive_in_box_enable',
-            self.enable_cb,
-            10
-)
+        # self.get_logger().info("SignDoorNavigator gestartet.")
 
     # -------------------------------------------------------------------------
     # Callbacks
@@ -169,23 +206,83 @@ class DriveInBox(Node):
             return
         self.latest_scan = msg
 
-    def sign_cb(self, msg: Bool):
+    # def sign_cb(self, msg: Bool):
+    #     if not self.enabled:
+    #         return
+
+    #     if msg.data and self.tunnel_counter>5:
+    #         self.get_logger().info("Schild erkannt (Topic) -> starte Tür-/Lücken-Suche.")
+    #         self.sign_seen = True
+    #         self.try_compute_and_send_goal()
+
+    # def _simulate_sign_once(self):
+    #     # Timer feuert einmal, dann nicht mehr
+    #     if not self.enabled:
+    #         return
+    #     if not self.sign_seen:
+    #         self.get_logger().info("Simuliere Schild-Erkennung (Hilfsvariable).")
+    #         self.sign_seen = True
+    #         self.try_compute_and_send_goal()
+
+    def sign_detections_callback(self, msg: Detection2DArray):
+        """
+        React to YOLO sign detections while in lane_following mode.
+
+        We look at classes 'left', 'right', 'stop' and take the one with the
+        largest bounding-box area. If its area exceeds sign_area_threshold,
+        we trigger a short-lived sign_state.
+        """
+
         if not self.enabled:
+            self.get_logger().info(f"[sign_detection_callback] self.enabled: {self.enabled}")
             return
-        
-        if msg.data and not self.sign_seen:
+        elif self.sign_seen:
+            self.get_logger().info(f"[sign_detection_callback] self.sign_seen: {self.sign_seen}")
+            return
+        elif self.latest_scan is None:
+            self.get_logger().info(f"[sign_detection_callback] self.latest_scan: {self.latest_scan}")
+            return
+
+        # self.get_logger().info(f"[sign_detection_callback] self.enabled: {self.enabled} | self.sign_seen {self.sign_seen}")
+
+        best_class = None
+        best_area = 0.0
+
+        for det in msg.detections:
+            if not det.results:
+                continue
+            class_id = det.results[0].hypothesis.class_id
+            if class_id not in ('tunnel'):
+                continue
+
+            w = det.bbox.size_x
+            h = det.bbox.size_y
+            area = float(w * h)
+
+            if area > best_area:
+                best_area = area
+                best_class = class_id
+
+        self.get_logger().info(f"[sign_detection_callback] best_class: {best_class}")
+        if best_class is None:
+            return
+
+        # Require minimum size (close sign)
+        self.get_logger().info(f"[sign_detection_callback] best_area: {best_area}")
+        if best_area < self.sign_area_threshold:
+            return
+
+        # (now is already defined above)
+        if best_class == 'tunnel':
+            self.tunnel_counter += 1
+
+        self.get_logger().info(f"[sign_detection_callback] self.tunnel_counter: {self.tunnel_counter}")
+
+        if self.tunnel_counter > 4 and not self.sign_seen:
             self.get_logger().info("Schild erkannt (Topic) -> starte Tür-/Lücken-Suche.")
             self.sign_seen = True
             self.try_compute_and_send_goal()
 
-    def _simulate_sign_once(self):
-        # Timer feuert einmal, dann nicht mehr
-        if not self.enabled:
-            return
-        if not self.sign_seen:
-            self.get_logger().info("Simuliere Schild-Erkennung (Hilfsvariable).")
-            self.sign_seen = True
-            self.try_compute_and_send_goal()
 
     # -------------------------------------------------------------------------
     # Hauptlogik
@@ -195,18 +292,24 @@ class DriveInBox(Node):
             return
         if self.latest_scan is None:
             self.get_logger().warn("Noch kein LaserScan empfangen, kann Lücke nicht bestimmen.")
+            self.sign_seen = False
+            self.tunnel_counter = 0
             return
 
         # 1) Lücke im Lidar finden, die wie eine Tür aussieht
         success, door_angle_rel = self.find_opening_angle(self.latest_scan)
         if not success:
             self.get_logger().warn("Keine gültige Tür-Lücke im Scan gefunden.")
+            self.sign_seen = False
+            self.tunnel_counter = 0
             return
 
         # 2) Roboterpose im map-Frame holen
         pose = self.get_robot_pose()
         if pose is None:
             self.get_logger().warn("Kann Roboterpose nicht aus TF lesen.")
+            self.sign_seen = False
+            self.tunnel_counter = 0
             return
 
         (x_r, y_r, yaw_r) = pose
@@ -214,19 +317,26 @@ class DriveInBox(Node):
         # 3) Zielposition berechnen (kurz hinter der Wand)
         wall_dist = self.get_parameter('wall_distance_estimate').get_parameter_value().double_value
         inside_offset = self.get_parameter('inside_offset').get_parameter_value().double_value
+        angle_scale = self.get_parameter('goal_angle_scale').get_parameter_value().double_value
+
         d_goal = wall_dist + inside_offset
 
-        theta_world = yaw_r + door_angle_rel
+        # Türwinkel nur optional berücksichtigen
+        theta_world = yaw_r + angle_scale * door_angle_rel
+
         x_goal = x_r + d_goal * math.cos(theta_world)
         y_goal = y_r + d_goal * math.sin(theta_world)
 
         self.get_logger().info(
             f"Setze Ziel hinter Lücke: angle_rel={math.degrees(door_angle_rel):.1f}°, "
+            f"angle_scale={angle_scale:.2f}, "
             f"goal=({x_goal:.2f}, {y_goal:.2f}) in map."
         )
 
         # 4) Nav2 Goal senden
         self.send_nav_goal(x_goal, y_goal, theta_world)
+        self.sign_seen = False
+        self.tunnel_counter = 0
 
     # -------------------------------------------------------------------------
     # Lücken- und Tür-Suche im LaserScan
@@ -310,12 +420,9 @@ class DriveInBox(Node):
             f"Lücke gefunden: index={best_idx}, angle={math.degrees(angle_at_idx):.1f}°."
         )
 
-        # --- Türprüfung: links und rechts muss Wand sein ---
+        # --- Türprüfung: links und rechts muss Wand im gewünschten Distanzbereich sein ---
         check_offset_deg = self.get_parameter('door_check_offset_deg').get_parameter_value().double_value
         check_offset = math.radians(check_offset_deg)
-
-        wall_factor = self.get_parameter('door_walldist_factor').get_parameter_value().double_value
-        wall_threshold = wall_dist * wall_factor
 
         def clamp_index(idx: int) -> Optional[int]:
             if 0 <= idx < len(scan.ranges):
@@ -329,17 +436,50 @@ class DriveInBox(Node):
             self.get_logger().warn("Türprüfung außerhalb Scanbereich.")
             return False, 0.0
 
-        r_left = ranges[idx_left]
-        r_right = ranges[idx_right]
+        # Fensterbreite (Bogenlänge in m auf Wanddistanz)
+        wall_window_m = self.get_parameter('door_wall_window_m').get_parameter_value().double_value
+        min_wall_dist = self.get_parameter('min_wall_dist_m').get_parameter_value().double_value
+        max_wall_dist = self.get_parameter('max_wall_dist_m').get_parameter_value().double_value
+
+        if wall_dist > 0.0 and wall_window_m > 0.0:
+            # Bogenwinkel, der ±wall_window_m an der Wand abdeckt
+            window_angle = wall_window_m / wall_dist  # rad
+            window_indices = max(1, int(round(window_angle / angle_inc)))
+        else:
+            window_indices = 0
+
+        def min_range_in_window(center_idx: int) -> float:
+            start = max(0, center_idx - window_indices)
+            end = min(len(ranges) - 1, center_idx + window_indices)
+            vals = [
+                ranges[i]
+                for i in range(start, end + 1)
+                if not math.isinf(ranges[i]) and not math.isnan(ranges[i])
+            ]
+            if not vals:
+                return math.inf
+            return min(vals)
+
+        r_left = min_range_in_window(idx_left)
+        r_right = min_range_in_window(idx_right)
 
         self.get_logger().info(
-            f"Türprüfung: left={r_left:.2f} m, right={r_right:.2f} m "
-            f"(Schwellwert Wand={wall_threshold:.2f} m)"
+            f"Türprüfung (Fenster): left={r_left:.2f} m, right={r_right:.2f} m "
+            f"(Wall-Range={min_wall_dist:.2f}–{max_wall_dist:.2f} m, "
+            f"window_indices=±{window_indices})"
         )
 
-        # Wand = gültiger, endlicher Wert und kleiner als Schwelle
-        valid_left = (not math.isinf(r_left)) and (not math.isnan(r_left)) and (r_left < wall_threshold)
-        valid_right = (not math.isinf(r_right)) and (not math.isnan(r_right)) and (r_right < wall_threshold)
+        # Wand gültig, wenn:
+        #  - Distanzwert endlich
+        #  - innerhalb des gewünschten Bereichs (z.B. 0.15–0.40 m)
+        valid_left = (
+            not math.isinf(r_left)
+            and (min_wall_dist <= r_left <= max_wall_dist)
+        )
+        valid_right = (
+            not math.isinf(r_right)
+            and (min_wall_dist <= r_right <= max_wall_dist)
+        )
 
         if valid_left and valid_right:
             self.get_logger().info("Symmetrische Lücke erkannt -> Gültiger Eingang!")
