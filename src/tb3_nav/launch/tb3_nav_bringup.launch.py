@@ -112,8 +112,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_params_file,
-        # cartographer,
-        # nav2,
+        cartographer,
+        nav2,
         yolo_node,
         # control_node,
         GUI_node,
