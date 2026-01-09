@@ -22,7 +22,7 @@
 *.data
 
 # Nav2 costmap debug images
-*.png
+#*.png
 
 ##########
 # CMake / Compiler Artefakte
