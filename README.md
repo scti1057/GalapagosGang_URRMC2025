@@ -1,4 +1,4 @@
-<img src="image.png" width="200" height="100" align="right">
+<img src="20250930_1844_GalapagosSkateboardingTurtle.png" height="80" align="right">
 
 # Upper Rhine Mobile Robotics Challenge 2025 - Galapagos Gang
 
