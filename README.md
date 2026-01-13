@@ -19,6 +19,13 @@ The codebase utilizes **ROS 2** (Robot Operating System) to orchestrate sensor f
 
 Before running the code, ensure your system meets the following hardware and software requirements.
 
+### Knowledge
+
+For getting started with the TurtleBots, the ROS-Humble environment and this repository please read (and understand) the following manuals:
+
+* **[Turtlebot](https://emanual.robotis.com/docs/en/platform/turtlebot3/overview/)**
+* **[ROS Humble](https://docs.ros.org/en/humble/index.html)**
+
 ### Hardware
 
 * **Robot:** TurtleBot3 Burger
